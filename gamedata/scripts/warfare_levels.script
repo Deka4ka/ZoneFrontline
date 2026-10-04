@@ -1,0 +1,301 @@
+-- werejew
+
+-- This file is used to analyze levels. In the previous version of warfare, level analysis was relatively messy.
+
+
+--[[
+
+	Factions will calculate a risk associated with levels, which will be based on how many enemy bases are present, and if their current level
+	is a higher priority level for any enemy faction on neighboring levels.
+	
+	level_information[level].faction_stats[faction] = {
+		base_count = #,
+		territory_count = #,
+		resource_count = #,
+		linked_resource_count = #,
+		total_power = #,
+		faction_war = bool,
+		inactive_count, -- current_action == 1
+		active_count, -- current_action == 0
+		
+		-- the following likely isn't necessary		
+		offense_squads, -- current_action = 0 and (target.props.base > 0 or target.props.resource > 0)
+		patrol_squads, 	-- current_action = 0 and (target.props.base == 0 and target.props.resource == 0)
+	}
+	
+	level_information[level].levels_by_distance = {}
+	level_information[level].faction_count = #
+	level_information[level].smarts = {}
+	level_information[level].base_count = #
+	level_information[level].territory_count = #
+	level_information[level].resource_count = #
+	level_information[level].lair_count = #
+	level_information[level].first_update = true
+
+]]
+
+level_timers = {}
+level_information = {}
+
+-- Level admission -------------------------------------------------------------
+--
+-- Warfare reasons about levels through two static tables it does not own:
+-- level_targets.level_links (topology) and global_position.level_offsets
+-- (coordinates). Both stop at level 34. level_information, by contrast, is
+-- discovered at runtime from whatever smarts SIMBOARD reports, so a level added by
+-- an add-on lands in it, gets bootstrapped,
+-- owned and driven -- and then kills the process on the first lookup into a static
+-- table that has never heard of it.
+--
+-- A level is admitted only when both static tables know it. Everything else is kept
+-- out of warfare entirely, rather than nil-guarded at each of the ten use sites. The
+-- predicate is data-driven on purpose: an add-on that supplies its own level_links
+-- and level_offsets entries is admitted with no change here.
+--
+-- Only positive verdicts are cached. Level add-ons register their entries from their
+-- own actor_on_first_update, after warfare has already asked about their levels, so a
+-- negative answer is re-evaluated on every call; warfare.build_level_information
+-- (actor_on_update one-shot) is where the admitted set is finally acted on.
+--
+-- active_levels is deliberately not part of the test. It is the aggregation roster
+-- for update() below, not an eligibility list -- level 34 (y04_pole) has links and
+-- offsets but no active_levels entry, and works today.
+local level_supported = {}
+local level_support_logged = {}
+
+local function level_name_for(level_id)
+	local ok, name = pcall(function() return alife():level_name(level_id) end)
+	return (ok and name) or "unknown"
+end
+
+function is_level_supported(level_id)
+	-- A nil level_id means the object's game vertex resolves to no level at all (seen
+	-- on squads carrying an out-of-range m_game_vertex_id). Nothing warfare does with
+	-- such an object is meaningful, so it is excluded like any other.
+	if (level_id == nil) then
+		if not (level_support_logged["nil"]) then
+			level_support_logged["nil"] = true
+			warfare_log.warn("is_level_supported: nil level_id, object excluded from warfare (reported once)")
+		end
+		return false
+	end
+
+	if (level_supported[level_id]) then
+		return true
+	end
+
+	local has_links = (level_targets.level_links[level_id] ~= nil)
+	local has_offsets = (global_position.level_offsets[level_id] ~= nil)
+	local supported = has_links and has_offsets
+	if (supported) then
+		level_supported[level_id] = true
+		if (level_support_logged[level_id]) then
+			warfare_log.info("level %s (%s) admitted to warfare: add-on registered its level_links and level_offsets",
+				tostring(level_id), level_name_for(level_id))
+		end
+	end
+
+	if not (supported) and not (level_support_logged[level_id]) then
+		level_support_logged[level_id] = true
+		warfare_log.warn("level %s (%s) excluded from warfare: level_links=%s level_offsets=%s (reported once)",
+			tostring(level_id), level_name_for(level_id),
+			has_links and "ok" or "missing", has_offsets and "ok" or "missing")
+	end
+
+	return supported
+end
+
+-- Resolves and caches smart.level_id as a side effect, so callers past this point
+-- can rely on it being set.
+function is_smart_supported(smart)
+	if not (smart) then
+		return false
+	end
+	if not (smart.level_id) then
+		smart.level_id = game_graph():vertex(smart.m_game_vertex_id):level_id()
+	end
+	return is_level_supported(smart.level_id)
+end
+
+-- Squads change level, so nothing is cached on the object here.
+function is_squad_supported(squad)
+	if not (squad) then
+		return false
+	end
+	return is_level_supported(game_graph():vertex(squad.m_game_vertex_id):level_id())
+end
+
+-- Drop-in replacement for pairs(SIMBOARD.smarts_by_names) that yields only smarts on
+-- admitted levels, so the callers that walk every smart (level_information setup,
+-- new-game seeding, spawn-timer stagger) keep their loop shape and pick up the filter
+-- in a single line.
+function supported_smarts()
+	local nxt, tbl, key = pairs(SIMBOARD.smarts_by_names)
+	return function()
+		local smart
+		repeat
+			key, smart = nxt(tbl, key)
+		until (key == nil) or is_smart_supported(smart)
+		return key, smart
+	end
+end
+
+-- active_levels is add-on writable; a level listed there without a level_information
+-- entry (not admitted, or admitted with no smarts) is skipped rather than aggregated.
+function update()
+	warfare_log.trace("warfare_levels.update: tick start")
+	for i,lvl in pairs(level_targets.active_levels) do
+		if (level_information[lvl]) then
+			update_level(lvl)
+		end
+	end
+end
+
+-- setup the faction table within level_information[level_id]["faction_stats"] and add one to the faction count
+function setup_faction_table(lvl, faction)
+	warfare_log.trace("setup_faction_table: lvl=%s faction=%s", tostring(lvl), tostring(faction))
+	if (faction ~= "none") then
+		level_information[lvl].faction_count = level_information[lvl].faction_count + 1
+	end
+
+	level_information[lvl].faction_stats[faction] = {
+		base_count = 0,
+		territory_count = 0,
+		resource_count = 0,
+		linked_resource_count = 0,
+		total_power = 0,
+		inactive_count = 0,
+		active_count = 0,
+	}
+end
+
+-- will be used by factions to determine whether or not they should find a new level to target
+function faction_enemy_present(lvl, faction)
+	if (faction == "none") then
+		return 0, {}
+	end
+
+	local enemyCount = 0
+	local enemies = {}
+
+	for f,tbl in pairs(level_information[lvl].faction_stats) do
+		if (faction ~= f) then
+			if (game_relations.is_factions_enemies(faction, f)) then
+				enemyCount = enemyCount + 1
+				enemies[f] = true
+			end
+		end
+	end
+
+	warfare_log.trace("faction_enemy_present: lvl=%s faction=%s enemy_count=%s", tostring(lvl), tostring(faction), tostring(enemyCount))
+	return enemyCount, enemies
+end
+
+-- Updates information for the specified level.
+function update_level(lvl)
+	if (not level_timers[lvl] or warfare.get_time_ref():diffSec(level_timers[lvl]) >= (level_information[lvl].next_update*6)) then
+		warfare_log.trace("update_level: lvl=%s entering update branch", tostring(lvl))
+
+		level_timers[lvl] = warfare.get_time()
+
+		level_information[lvl].next_update = math.random(5, 20)
+		
+		--printf("--- updating " .. game.translate_string(alife():level_name(lvl)) .. " ---")
+		
+		-- TODO: store the levels information in level_information. The information will contain what factions are present and their strength.
+		-- Strength will be based on the sum of all squads power. Will also store how many bases each faction owns. Resource points will be counted as well.
+				
+		-- clear old data; might not want to do this, as this will cause factions to re-evaluate their target level every time the current level updates.
+		-- test out how this feels when playing. Worst case, set up a temporary faction_stats table, then compare the two tables and remove factions no longer in
+		-- the temp faction_stats table.
+		level_information[lvl].faction_stats = {}		
+		level_information[lvl].faction_count = 0
+		level_information[lvl].faction_war = false
+		
+		-- Make sure the none entry is set up.
+		setup_faction_table(lvl, "none")
+		
+		for i,sm in pairs(level_information[lvl].smarts) do
+			local smart = sm and alife_object(sm)
+			
+			if (smart and smart.owning_faction) then
+				if not (level_information[lvl].faction_stats[smart.owning_faction]) then
+					setup_faction_table(lvl, smart.owning_faction)
+				end
+				
+				-- smart.defense_power is set by check_owner (runs lazily from
+				-- smart_terrain_on_update on the alife scheduler's batch). It
+				-- can be nil here for smarts that warfare bootstrapped eagerly
+				-- but the scheduler hasn't ticked yet. Match the existing
+				-- `or 0` idiom used at smart_terrain_warfare.script:5584/5672/5792.
+				-- total_power is purely diagnostic (warfare_factions logs it but
+				-- no decision reads it), so a one-tick underestimate is fine.
+				local dp = smart.defense_power or 0
+				if (smart.props.base > 0) then
+					level_information[lvl].faction_stats[smart.owning_faction].base_count = level_information[lvl].faction_stats[smart.owning_faction].base_count + 1
+					level_information[lvl].faction_stats[smart.owning_faction].total_power = level_information[lvl].faction_stats[smart.owning_faction].total_power + dp
+				elseif (smart.props.territory > 0) then
+					level_information[lvl].faction_stats[smart.owning_faction].territory_count = level_information[lvl].faction_stats[smart.owning_faction].territory_count + 1
+					level_information[lvl].faction_stats[smart.owning_faction].total_power = level_information[lvl].faction_stats[smart.owning_faction].total_power + dp
+				end
+
+				if (smart.props.resource > 0) then
+					--printf("adding one to resource for " .. alife():level_name(lvl))
+					level_information[lvl].faction_stats[smart.owning_faction].resource_count = level_information[lvl].faction_stats[smart.owning_faction].resource_count + 1
+					level_information[lvl].faction_stats[smart.owning_faction].total_power = level_information[lvl].faction_stats[smart.owning_faction].total_power + dp
+				end
+			end
+		end
+		
+		-- avoid calculating new targets at the first update. when saving, save old targets so they persist.
+		if level_information[lvl].first_update then
+			warfare_log.info("update_level: lvl=%s first update, deferring target calculation", tostring(lvl))
+			level_information[lvl].first_update = false
+
+			-- Second update should happen RIGHT after first update, or some bases get stuck not finding targets for a while
+			level_information[lvl].next_update = 0
+
+
+        			return
+		end
+		
+		for f,tbl in pairs(level_information[lvl].faction_stats) do
+			if f ~= "none" then
+				for lvl2,_ in pairs(level_targets.level_links[lvl]) do
+					if (level_information[lvl2] and level_information[lvl2].faction_stats[f]) then
+						--printf("!!! adding " .. level_information[lvl2].faction_stats[f].resource_count .. " to linked resources")
+						level_information[lvl].faction_stats[f].linked_resource_count = level_information[lvl].faction_stats[f].linked_resource_count + level_information[lvl2].faction_stats[f].resource_count
+					end
+				end
+				
+				if level_information[lvl].faction_count == 1 then
+					level_information[lvl].faction_stats[f].faction_war = false
+				else				
+					local enemyCount, enemies = faction_enemy_present(lvl, f)
+					level_information[lvl].faction_stats[f].faction_war = (enemyCount > 0)
+				end
+			end
+		end
+		
+		--printf("faction count for " .. game.translate_string(alife():level_name(lvl)) .. ": " .. level_information[lvl].faction_count)
+		
+		for f,tbl in pairs(level_information[lvl].faction_stats) do
+			local bc = tbl.base_count
+			local tc = tbl.territory_count
+			local rc = tbl.resource_count
+			local tp = tbl.total_power
+			local fw = tbl.faction_war
+			local ac = tbl.active_count
+			local ic = tbl.inactive_count
+			
+			--[[--printf(game.translate_string(f) .. " base_count: " .. bc)
+			--printf(game.translate_string(f) .. " territory_count: " .. tc)
+			--printf(game.translate_string(f) .. " resource_count: " .. rc)
+			--printf(game.translate_string(f) .. " total_power: " .. tp)
+			--printf(game.translate_string(f) .. " faction_war: " .. tostring(fw))
+			--printf(game.translate_string(f) .. " active_count: " .. tostring(ac))
+			--printf(game.translate_string(f) .. " inactive_count: " .. tostring(ic))]]
+		end
+	end
+
+end

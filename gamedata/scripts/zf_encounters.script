@@ -1,0 +1,576 @@
+local C = zf_core
+local function set(list)
+    local t = {}
+    for _, v in ipairs(list) do t[v] = true end
+    return t
+end
+local SOUTH = set({ "l01_escape", "k00_marsh", "l02_garbage", "l03_agroprom", "l03u_agr_underground",
+    "k01_darkscape", "l04_darkvalley", "l04u_labx18", "l05_bar", "l06_rostok", "y04_pole" })
+local NORTH = set({ "l10_red_forest", "l10_radar", "l10_limansk", "l10u_bunker", "l11_hospital", "l11_pripyat",
+    "pripyat", "l12_stancia", "l12_stancia_2", "l12u_sarcofag", "l12u_control_monolith", "l13_generators",
+    "l13u_warlab" })
+local TIERS = {
+    south = { novice = 5, advanced = 3, veteran = 1 },
+    mid   = { novice = 2, advanced = 4, veteran = 3, alpha = 1 },
+    north = { advanced = 2, veteran = 4, alpha = 2 },
+}
+local MUTANTS = {
+    south = { "simulation_dog", "simulation_mix_dogs", "simulation_flesh", "simulation_boar",
+        "simulation_mix_boar_flesh", "simulation_pseudodog", "simulation_cat", "simulation_tushkano_7_10" },
+    mid   = { "simulation_bloodsucker", "simulation_snork_2_5", "simulation_pseudodog", "simulation_psy_dog_squad",
+        "simulation_lurker", "simulation_boar_3_5", "simulation_fracture", "simulation_zombie_3_6" },
+    north = { "simulation_bloodsucker_black", "simulation_chimera", "simulation_burer", "simulation_controller",
+        "simulation_gigant", "simulation_psysucker", "simulation_poltergeist_flame", "simulation_contr_4zomb_norm" },
+    night = { "simulation_bloodsucker", "simulation_bloodsucker_black", "simulation_psysucker",
+        "simulation_snork_2_5", "simulation_chimera", "simulation_lurker_black", "simulation_poltergeist" },
+}
+local PREFIX = { dolg = "duty", killer = "merc" }
+local FALLBACK = { alpha = "veteran", sniper = "veteran", veteran = "advanced", advanced = "novice" }
+function pick(list)
+    if #list > 0 then return list[math.random(#list)] end
+end
+local function weighted(t)
+    local total = 0
+    for _, w in pairs(t) do total = total + w end
+    local r = math.random() * total
+    for k, w in pairs(t) do
+        r = r - w
+        if r <= 0 then return k end
+    end
+end
+function squad_section(f, tier)
+    while tier do
+        local sec = (tier == "alpha") and (f .. "_sim_squad_alpha") or ((PREFIX[f] or f) .. "_sim_squad_" .. tier)
+        if ini_sys:section_exist(sec) then return sec end
+        tier = FALLBACK[tier]
+    end
+end
+function tier(ctx, elite)
+    if elite then return math.random() < 0.5 and "veteran" or "alpha" end
+    local t = weighted(TIERS[ctx.region])
+    if ctx.night and t == "novice" and math.random() < 0.5 then t = "advanced" end
+    return t
+end
+function mutant(ctx, nocturnal)
+    local pool = {}
+    for _, sec in ipairs(MUTANTS[nocturnal and "night" or ctx.region]) do
+        if ini_sys:section_exist(sec) then pool[#pool + 1] = sec end
+    end
+    return pick(pool)
+end
+function factions(ok)
+    local out = {}
+    for _, f in ipairs(C.war_factions()) do
+        if ok(f) then out[#out + 1] = f end
+    end
+    return out
+end
+local function hostile(ctx) return factions(function(f) return C.enemies(f, ctx.af) end) end
+local function friendly(ctx) return factions(function(f) return C.friends(f, ctx.af) end) end
+local function not_hostile(ctx) return factions(function(f) return not C.enemies(f, ctx.af) end) end
+function far(ctx, except)
+    local list = {}
+    for _, sm in ipairs(ctx.far) do
+        if not (except and sm.id == except.id) then list[#list + 1] = sm end
+    end
+    return pick(list)
+end
+function quiet(list, sides, except)
+    local best, bs
+    for _, sm in ipairs(list or {}) do
+        if not (except and sm.id == except.id) then
+            local s = math.random()
+            for id in pairs((SIMBOARD.smarts[sm.id] or {}).squads or {}) do
+                local sq = C.live_squad(id)
+                local f = sq and sq:get_squad_community()
+                if f and not sides[f] then s = s + 1 end
+            end
+            local o = sm.owning_faction
+            for f in pairs(sides) do
+                if C.human(o) and C.enemies(f, o) then s = s + 3 end
+            end
+            if not bs or s < bs then best, bs = sm, s end
+        end
+    end
+    return best
+end
+function wide(ctx, dmin, dmax)
+    local out, p = {}, ctx.target.position
+    for _, sm in ipairs(C.smarts_on_level(ctx.lid)) do
+        local d = sm.position:distance_to(p)
+        if d >= dmin and d <= dmax then out[#out + 1] = sm end
+    end
+    return out
+end
+function across(ctx, from)
+    local best, bd
+    for _, sm in ipairs(ctx.far) do
+        local d = sm.position:distance_to(from.position)
+        if sm.id ~= from.id and (not bd or d > bd) then best, bd = sm, d end
+    end
+    return best
+end
+function squad(out, sec, from, to)
+    if not (sec and from and to) then return end
+    local ok, sq = pcall(warfare.spawn_squad, sec, from)
+    if not (ok and sq) then
+        C.warn("encounter spawn failed: %s at %s: %s", sec, from:name(), sq)
+        return
+    end
+    C.send(sq, to.id, C.cfg("enc_lifetime_h", 6))
+    C.shield(sq, C.cfg("enc_lifetime_h", 6))
+    out[#out + 1] = sq
+    return sq
+end
+local function foes(a, b)
+    if a and b then C.feud(a.id, b.id, C.cfg("enc_lifetime_h", 6)) end
+end
+local function news(key, f, snd, ...)
+    return { key = key, f = f, snd = snd, args = { ... } }
+end
+local TEMPLATES = {
+    {   id = "ambush", w = 10,
+        run = function(ctx)
+            local f, out = pick(hostile(ctx)), {}
+            if not f then return end
+            for _ = 1, ctx.night and 2 or 1 do
+                squad(out, squad_section(f, tier(ctx)), far(ctx), ctx.target)
+            end
+            return out
+        end },
+    {   id = "patrol_clash", w = 8,
+        run = function(ctx)
+            local fs = factions(function(f) return f ~= ctx.af end)
+            local a = pick(fs)
+            local b = a and pick(factions(function(f) return f ~= ctx.af and C.enemies(a, f) end))
+            if not b then return end
+            local out, from = {}, far(ctx)
+            foes(squad(out, squad_section(a, tier(ctx)), from, ctx.target),
+                squad(out, squad_section(b, tier(ctx)), across(ctx, from), ctx.target))
+            return out
+        end },
+    {   id = "elite_clash", w = 3,
+        run = function(ctx)
+            local a = pick(factions(function(f) return f ~= ctx.af end))
+            local b = a and pick(factions(function(f) return f ~= ctx.af and C.enemies(a, f) end))
+            if not b then return end
+            local out, from = {}, far(ctx)
+            foes(squad(out, squad_section(a, "alpha"), from, ctx.target),
+                squad(out, squad_section(b, "alpha"), across(ctx, from), ctx.target))
+            return out
+        end },
+    {   id = "distress", w = 6,
+        run = function(ctx)
+            local f = pick(friendly(ctx))
+            local h = f and pick(factions(function(x) return C.enemies(x, f) end))
+            if not h then return end
+            local out, from = {}, far(ctx)
+            foes(squad(out, squad_section(f, "novice"), from, ctx.target),
+                squad(out, squad_section(h, tier(ctx)), across(ctx, from), ctx.target))
+            return out, news("zf_enc_distress", f, "danger", C.smart_name(ctx.target))
+        end },
+    {   id = "relief", w = 5,
+        run = function(ctx)
+            local h = pick(hostile(ctx))
+            local f = pick(friendly(ctx))
+            if not (h and f) then return end
+            local out, from = {}, far(ctx)
+            foes(squad(out, squad_section(h, tier(ctx)), from, ctx.target),
+                squad(out, squad_section(f, tier(ctx)), across(ctx, from), ctx.target))
+            return out, news("zf_enc_relief", f, "news", C.smart_name(ctx.target))
+        end },
+    {   id = "convoy", w = 5,
+        run = function(ctx)
+            local f = pick(not_hostile(ctx))
+            if not f then return end
+            local out, from = {}, far(ctx)
+            local to = across(ctx, from)
+            local col = squad(out, squad_section(f, "advanced"), from, to)
+            local h = math.random() < 0.5 and pick(factions(function(x) return C.enemies(x, f) end))
+            if h then foes(col, squad(out, squad_section(h, tier(ctx)), far(ctx, from), ctx.target)) end
+            if C.friends(f, ctx.af) then
+                return out, news("zf_enc_convoy", f, "news", C.smart_name(ctx.target))
+            end
+            return out
+        end },
+    {   id = "hunted", w = 5,
+        run = function(ctx)
+            local a = pick(factions(function(f) return true end))
+            local b = a and pick(factions(function(f) return C.enemies(a, f) end))
+            if not b then return end
+            local out, from = {}, far(ctx)
+            local to = across(ctx, from)
+            local prey = squad(out, squad_section(a, "novice"), from, to)
+            local hunters = squad(out, squad_section(b, tier(ctx)), from, to)
+            foes(prey, hunters)
+            if prey and hunters then zf_life.chase(hunters, prey, 3) end
+            return out
+        end },
+    {   id = "mutant_hunt", w = 6,
+        run = function(ctx)
+            local f = pick(factions(function(f) return f ~= "monolith" end))
+            if not f then return end
+            local out, from = {}, far(ctx)
+            squad(out, mutant(ctx), from, ctx.target)
+            squad(out, squad_section(f, tier(ctx)), across(ctx, from), ctx.target)
+            return out
+        end },
+    {   id = "mutant_pack", w = 8,
+        run = function(ctx)
+            local out = {}
+            squad(out, mutant(ctx), far(ctx), ctx.target)
+            return out
+        end },
+    {   id = "migration", w = 5,
+        run = function(ctx)
+            local out, from = {}, far(ctx)
+            squad(out, mutant(ctx), from, across(ctx, from))
+            return out
+        end },
+    {   id = "night_terror", w = 6, night = true,
+        run = function(ctx)
+            local out = {}
+            squad(out, mutant(ctx, true), far(ctx), ctx.target)
+            if math.random() < 0.3 then squad(out, mutant(ctx, true), far(ctx), ctx.target) end
+            return out
+        end },
+    {   id = "recon", w = 5,
+        run = function(ctx)
+            local f = pick(hostile(ctx))
+            if not f then return end
+            local out = {}
+            squad(out, squad_section(f, (f == "army" or f == "monolith") and "sniper" or "veteran"), far(ctx), ctx.target)
+            return out
+        end },
+    {   id = "raiders", w = 6,
+        run = function(ctx)
+            local f = pick(factions(function(f) return (f == "bandit" or f == "renegade") and not C.friends(f, ctx.af) end))
+            if not f then return end
+            local out = {}
+            squad(out, squad_section(f, tier(ctx)), far(ctx), ctx.target)
+            squad(out, squad_section(f, "novice"), far(ctx), ctx.target)
+            return out
+        end },
+    {   id = "merc_contract", w = 3,
+        run = function(ctx)
+            if not C.enemies("killer", ctx.af) then return end
+            local out = {}
+            squad(out, squad_section("killer", tier(ctx, true)), far(ctx), ctx.target)
+            return out
+        end },
+    {   id = "monolith_push", w = 5, region = "north",
+        run = function(ctx)
+            if not C.enemies("monolith", ctx.af) then return end
+            local out = {}
+            for _ = 1, 2 do squad(out, squad_section("monolith", tier(ctx)), far(ctx), ctx.target) end
+            return out, news("zf_enc_monolith", nil, "danger", C.smart_name(ctx.target))
+        end },
+    {   id = "zombie_wave", w = 4,
+        run = function(ctx)
+            if ctx.region == "south" and not ctx.night then return end
+            local out = {}
+            for _ = 1, 2 do
+                squad(out, squad_section("zombied", "novice") or "simulation_zombie_3_6", far(ctx), ctx.target)
+            end
+            return out, news("zf_enc_zombies", nil, "news", C.smart_name(ctx.target))
+        end },
+    {   id = "army_sweep", w = 4,
+        run = function(ctx)
+            if ctx.region == "north" then return end
+            local out = {}
+            for _ = 1, 2 do squad(out, squad_section("army", "veteran"), far(ctx), ctx.target) end
+            if C.friends("army", ctx.af) then
+                return out, news("zf_enc_sweep", "army", "news", C.smart_name(ctx.target))
+            end
+            return out
+        end },
+    {   id = "lost_patrol", w = 4,
+        run = function(ctx)
+            local f = pick(factions(function(f) return not C.enemies(f, ctx.af) end))
+            if not f then return end
+            local out, from = {}, far(ctx)
+            squad(out, squad_section(f, "novice"), from, across(ctx, from))
+            return out
+        end },
+    {   id = "checkpoint", w = 4,
+        run = function(ctx)
+            local f = pick(factions(function(f)
+                return f == "army" or f == "dolg" or f == "freedom" or f == "bandit" or f == "stalker" or f == "killer"
+            end))
+            if not f then return end
+            local out, at = {}, far(ctx)
+            squad(out, squad_section(f, tier(ctx)), at, at)
+            if C.friends(f, ctx.af) then
+                return out, news("zf_enc_checkpoint", f, "news", C.smart_name(at))
+            end
+            return out
+        end },
+    {   id = "scavengers", w = 4,
+        run = function(ctx)
+            local site = battlefield(ctx)
+            local f = site and pick(factions(function(f) return f == "stalker" or f == "bandit" or f == "renegade" end))
+            if not f then return end
+            local out = {}
+            squad(out, squad_section(f, "novice"), far(ctx, site), site)
+            return out
+        end },
+    {   id = "last_stand", w = 3,
+        run = function(ctx)
+            local f = pick(friendly(ctx))
+            if not f then return end
+            local out, at = {}, far(ctx)
+            squad(out, squad_section(f, "novice"), at, at)
+            squad(out, mutant(ctx), across(ctx, at), at)
+            squad(out, mutant(ctx, ctx.night), far(ctx, at), at)
+            return out, news("zf_enc_last_stand", f, "danger", C.smart_name(at))
+        end },
+    {   id = "sniper_duel", w = 3,
+        run = function(ctx)
+            local a = pick(factions(function(f) return f ~= ctx.af end))
+            local b = a and pick(factions(function(f) return f ~= ctx.af and C.enemies(a, f) end))
+            if not b then return end
+            local function marksmen(f) return squad_section(f, (f == "army" or f == "monolith") and "sniper" or "veteran") end
+            local out, from = {}, far(ctx)
+            foes(squad(out, marksmen(a), from, ctx.target), squad(out, marksmen(b), across(ctx, from), ctx.target))
+            return out
+        end },
+    {   id = "vip_escort", w = 3,
+        run = function(ctx)
+            local c = pick(factions(function(f) return f ~= "killer" and not C.enemies(f, "killer") end))
+            if not c then return end
+            local out, from = {}, far(ctx)
+            local to = across(ctx, from)
+            local guard = squad(out, squad_section("killer", "veteran"), from, to)
+            local client = squad(out, squad_section(c, "novice"), from, to)
+            local h = pick(factions(function(f) return C.enemies(f, c) end))
+            local killers = h and squad(out, squad_section(h, tier(ctx)), far(ctx, from), ctx.target)
+            foes(killers, client)
+            foes(killers, guard)
+            return out
+        end },
+    {   id = "debt_collectors", w = 4,
+        run = function(ctx)
+            local f = pick(factions(function(f) return f == "stalker" or f == "csky" or f == "freedom" end))
+            local h = f and pick(factions(function(x) return (x == "bandit" or x == "renegade") and C.enemies(x, f) end))
+            if not h then return end
+            local out, from = {}, far(ctx)
+            local to = across(ctx, from)
+            local d = squad(out, squad_section(f, "novice"), from, to)
+            if not d then return out end
+            trim(d, 1)
+            local c = squad(out, squad_section(h, tier(ctx)), from, to)
+            if c then
+                zf_life.chase(c, d, 3)
+                foes(c, d)
+            end
+            if C.friends(f, ctx.af) then return out, news("zf_enc_debt", f, "danger", C.smart_name(ctx.target), C.faction_name(h)) end
+            return out
+        end },
+    {   id = "lost_rookie", w = 4,
+        run = function(ctx)
+            local f = pick(not_hostile(ctx))
+            if not f then return end
+            local out, from = {}, far(ctx)
+            local to = across(ctx, from)
+            local r = squad(out, squad_section(f, "novice"), from, to)
+            if not r then return out end
+            trim(r, 1)
+            if math.random() < 0.6 then squad(out, mutant(ctx, ctx.night), far(ctx, from) or from, to) end
+            return out
+        end },
+    {   id = "artefact_hunters", w = 4,
+        run = function(ctx)
+            local f = pick(factions(function(f) return f == "stalker" or f == "csky" or f == "ecolog" or f == "freedom" end))
+            if not f then return end
+            local out, from = {}, far(ctx)
+            local s = squad(out, squad_section(f, "advanced"), from, ctx.target)
+            local h = s and math.random() < 0.5 and pick(factions(function(x) return (x == "bandit" or x == "renegade") and C.enemies(x, f) end))
+            local trail = h and squad(out, squad_section(h, tier(ctx)), far(ctx, from) or from, ctx.target)
+            if trail then
+                zf_life.chase(trail, s, 3)
+                foes(trail, s)
+            end
+            return out
+        end },
+    {   id = "caravan", w = 4,
+        run = function(ctx) return zf_traders.caravan(ctx) end },
+    {   id = "road_ambush", w = 4,
+        run = function(ctx)
+            local f = pick(hostile(ctx))
+            if not f then return end
+            local out, at = {}, far(ctx)
+            squad(out, squad_section(f, tier(ctx)), at, at)
+            return out
+        end },
+}
+function battlefield(ctx)
+    local list, t = {}, C.now()
+    for id, when in pairs(C.store("battles")) do
+        local sm = alife_object(id)
+        if sm and t - when < 6 * C.HOUR and C.smart_level(sm) == ctx.lid then list[#list + 1] = sm end
+    end
+    return pick(list)
+end
+function trim(sq, keep)
+    local extra = {}
+    for m in sq:squad_members() do
+        if m.id ~= sq:commander_id() then extra[#extra + 1] = m.id end
+    end
+    for i = keep, #extra do sq:remove_npc(extra[i], true) end
+end
+function track(tag, squads, hours)
+    local rec = {}
+    for _, sq in ipairs(squads) do rec[#rec + 1] = { id = sq.id, sec = sq:section_name() } end
+    C.store("enc")[tag .. "_" .. C.now() .. "_" .. math.random(999)] = { tag = tag,
+        squads = rec, expire = C.now() + (hours or C.cfg("enc_lifetime_h", 6)) * C.HOUR }
+end
+local CALM = set({ "distress", "convoy", "lost_patrol", "checkpoint", "last_stand", "vip_escort", "lost_rookie",
+    "artefact_hunters", "caravan", "hunters", "courier", "defector", "delegation", "deserters", "prisoners",
+    "scientists", "wounded" })
+local UNMARKED = set({ "trader_gone" })
+local shown = {}
+local function spot_of(tag)
+    return CALM[tag] and "green_location" or "red_location"
+end
+local function hint(m)
+    local s = game.translate_string("zf_mark_" .. m.tag)
+    return m.f and m.f ~= "" and (s .. " (" .. C.faction_name(m.f) .. ")") or s
+end
+local function unshow(id)
+    local spot = shown[id]
+    if spot and level.map_has_object_spot(id, spot) ~= 0 then level.map_remove_object_spot(id, spot) end
+    shown[id] = nil
+end
+function marks()
+    local out = {}
+    if not C.cfg("event_marks", true) then return out end
+    for key, e in pairs(C.store("enc")) do
+        local tag = e.tag or key:match("^(.-)_[%d%.]+_%d+$")
+        if tag and not UNMARKED[tag] then
+            for _, s in ipairs(e.squads) do
+                local sq = alife_object(s.id)
+                if sq and sq:clsid() == clsid.online_offline_group_s and sq:section_name() == s.sec and sq:npc_count() > 0 then
+                    out[#out + 1] = { id = s.id, sid = sq.current_target_id or sq.assigned_target_id or 0, tag = tag,
+                        f = sq:get_squad_community() }
+                end
+            end
+        end
+    end
+    local ok, waiting = pcall(zf_events.waiting)
+    for _, m in ipairs(ok and waiting or {}) do out[#out + 1] = m end
+    return out
+end
+function show(list, by_point)
+    local want = {}
+    for _, m in ipairs(list or {}) do
+        local id = by_point and m.sid or m.id
+        if id and id > 0 and not want[id] and alife_object(id) then
+            local spot = spot_of(m.tag)
+            want[id] = true
+            if shown[id] and shown[id] ~= spot then unshow(id) end
+            if not shown[id] and level.map_has_object_spot(id, spot) == 0 then
+                level.map_add_object_spot(id, spot, hint(m))
+                shown[id] = spot
+            end
+        end
+    end
+    for id in pairs(shown) do
+        if not want[id] then unshow(id) end
+    end
+end
+function region(lid)
+    local lname = alife():level_name(lid)
+    return SOUTH[lname] and "south" or NORTH[lname] and "north" or "mid"
+end
+function context()
+    local af = warfare.actor_faction
+    local ps = C.players()
+    if not af or #ps == 0 then return end
+    local anchor = ps[math.random(#ps)]
+    local lid, apos = C.player_level(anchor), anchor:position()
+    local dmin, dmax = C.cfg("enc_min_dist", 120), C.cfg("enc_max_dist", 350)
+    local far_list, target, td = {}, nil, nil
+    for _, sm in ipairs(C.smarts_on_level(lid)) do
+        local d = sm.position:distance_to(apos)
+        if d >= dmin and d <= dmax then far_list[#far_list + 1] = sm end
+        if not td or d < td then target, td = sm, d end
+    end
+    if not target or #far_list < 2 then return end
+    return {
+        af = af, lid = lid, target = target, far = far_list,
+        region = region(lid),
+        night = warfare_utils.is_night(),
+    }
+end
+local function near_player(sq, ps)
+    local lid = C.level_of(sq)
+    for _, p in ipairs(ps) do
+        if C.player_level(p) == lid and sq.position:distance_to(p:position()) < 200 then return true end
+    end
+    return false
+end
+local function housekeeping()
+    local enc, t, ps, live = C.store("enc"), C.now(), C.players(), 0
+    for key, e in pairs(enc) do
+        local alive = 0
+        for _, s in ipairs(e.squads) do
+            local sq = alife_object(s.id)
+            if sq and sq:clsid() == clsid.online_offline_group_s and sq:section_name() == s.sec then
+                if t >= e.expire and not near_player(sq, ps) then
+                    unshow(s.id)
+                    alife_release(sq)
+                else
+                    alive = alive + 1
+                end
+            end
+        end
+        if alive == 0 then enc[key] = nil else live = live + 1 end
+    end
+    return live
+end
+local function eligible(ctx, t)
+    return (not t.night or ctx.night) and (not t.region or t.region == ctx.region)
+end
+local function run()
+    if housekeeping() >= C.cfg("enc_max_active", 2) or not C.ready("enc") or not C.cfg("enc_enabled", true) then return end
+    if C.crowded() then return end
+    if math.random() > C.cfg("enc_chance", 0.5) then
+        C.cooldown("enc", 0.25)
+        return
+    end
+    local ctx = context()
+    if not ctx then return end
+    local pool = {}
+    for i, t in ipairs(TEMPLATES) do
+        if eligible(ctx, t) then pool[i] = t.w end
+    end
+    for _ = 1, 6 do
+        local t = TEMPLATES[weighted(pool)]
+        local squads, msg = t.run(ctx)
+        if squads and #squads > 0 then
+            track(t.id, squads)
+            C.cooldown("enc", C.cfg("enc_cooldown_h", 2) * C.rand(0.6, 1.4))
+            C.log("encounter %s at %s (%s, %s): %d squads", t.id, ctx.target:name(), ctx.region,
+                ctx.night and "night" or "day", #squads)
+            if msg then C.report("event", msg.f, true, msg.key, msg.f, msg.snd, unpack(msg.args)) end
+            return
+        end
+    end
+end
+local function on_npc_death(squad)
+    local at = squad and squad.online and squad.current_target_id
+    if at and alife_object(at) then C.store("battles")[at] = C.now() end
+end
+local function forget_battles()
+    local b, t = C.store("battles"), C.now()
+    for id, when in pairs(b) do
+        if t - when > 6 * C.HOUR then b[id] = nil end
+    end
+end
+function on_game_start()
+    C.every("zf_encounters", 60, run)
+    C.every("zf_marks", 5, function() show(marks()) end, true)
+    zf_front.on_update(function(s) if C.peer() then show(s.marks, true) end end)
+    C.every("zf_battles", 300, forget_battles, true)
+    RegisterScriptCallback("squad_on_npc_death", C.guard("zf_encounters.npc_death", on_npc_death))
+end

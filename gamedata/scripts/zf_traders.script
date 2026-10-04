@@ -1,0 +1,439 @@
+local C = zf_core
+local E = zf_encounters
+local SPOT = "ui_pda2_trader_location"
+local TRADES = {
+    stalker = { gunsmith_light = 3, gunsmith = 2, hunter = 3, ammo = 3, medic = 2, provisioner = 3, mechanic = 2,
+        artefacts = 2, taxidermist = 2, electronics = 1, junk = 2 },
+    bandit = { junk = 4, smuggler = 3, gunsmith_light = 2, ammo = 2, artefacts = 2, medic = 1 },
+    renegade = { junk = 3, smuggler = 2, gunsmith_light = 2, ammo = 1 },
+    dolg = { gunsmith = 3, ammo = 3, armorer = 2, medic = 2, explosives = 2, provisioner = 2, mechanic = 1 },
+    freedom = { smuggler = 3, gunsmith = 2, artefacts = 2, provisioner = 2, armorer = 1, medic = 1 },
+    army = { gunsmith = 2, ammo = 3, explosives = 3, armorer = 2, medic = 2, provisioner = 1 },
+    killer = { sniper = 3, explosives = 2, smuggler = 2, armorer = 2, gunsmith = 2 },
+    csky = { mechanic = 3, electronics = 2, medic = 2, gunsmith_light = 2, artefacts = 1, provisioner = 1 },
+    ecolog = { electronics = 3, medic = 3, artefacts = 2, exotic = 2 },
+    monolith = { exotic = 3, artefacts = 2, ammo = 2 },
+    greh = { exotic = 3, taxidermist = 2, artefacts = 2 },
+    isg = { sniper = 2, electronics = 2, exotic = 2, armorer = 2 },
+}
+local SCOPES = {
+    bandit = { all = 5, allies = 3, own = 2 }, renegade = { all = 4, allies = 3, own = 3 },
+    dolg = { own = 5, allies = 4, all = 1 }, army = { own = 5, allies = 4, all = 1 }, monolith = { own = 8, allies = 2 },
+    killer = { all = 8, allies = 2 }, greh = { own = 6, allies = 3, all = 1 }, isg = { own = 6, allies = 3, all = 1 },
+}
+local SCOPE_DEFAULT = { all = 6, allies = 3, own = 1 }
+local TIERS = { [1] = 5, [2] = 3.5, [3] = 1.5 }
+local TIER_SQUAD = { "novice", "advanced", "veteran" }
+local TIER_CASH = { 8000, 25000, 70000 }
+local by_npc = {}
+local peer_spots = {}
+local function traders()
+    return C.store("traders")
+end
+local function on()
+    return C.cfg("trader_enabled", true)
+end
+function profile(rec)
+    return "items\\trade\\zf_trade_" .. rec.type .. "_" .. rec.scope .. ".ltx"
+end
+function serves(scope, tf, pf)
+    if scope == "free" then return true end
+    if scope == "own" then return tf == pf end
+    if scope == "allies" then return tf == pf or C.friends(tf, pf) end
+    return not C.enemies(tf, pf)
+end
+function describe(name, ttype, tier, scope, f)
+    return C.text("zf_trader_hint", nil, name, game.translate_string("zf_trader_" .. ttype),
+        game.translate_string("zf_trade_tier_" .. tier), C.text("zf_trade_scope_" .. scope, nil, C.faction_name(f)))
+end
+local function mark(rec, sm)
+    if rec.marked or not sm then return end
+    rec.marked = true
+    if level.map_has_object_spot(sm.id, SPOT) == 0 then
+        level.map_add_object_spot_ser(sm.id, SPOT, describe(rec.name, rec.type, rec.tier, rec.scope, rec.f))
+    end
+end
+local function unmark(rec)
+    if rec.marked and level.map_has_object_spot(rec.smart, SPOT) ~= 0 then
+        level.map_remove_object_spot(rec.smart, SPOT)
+    end
+    rec.marked = nil
+end
+local function sync_peer_spots(snap)
+    local want = {}
+    for _, t in ipairs(snap.traders or {}) do
+        if t.marked and t.sid and t.sid > 0 then
+            want[t.sid] = true
+            if not peer_spots[t.sid] and alife_object(t.sid) and level.map_has_object_spot(t.sid, SPOT) == 0 then
+                level.map_add_object_spot(t.sid, SPOT, describe(t.name, t.type, t.tier, t.scope, t.f))
+                peer_spots[t.sid] = true
+            end
+        end
+    end
+    for sid in pairs(peer_spots) do
+        if not want[sid] then
+            if level.map_has_object_spot(sid, SPOT) ~= 0 then level.map_remove_object_spot(sid, SPOT) end
+            peer_spots[sid] = nil
+        end
+    end
+end
+local function busy_smart(id)
+    for _, rec in pairs(traders()) do
+        if rec.smart == id then return true end
+    end
+    return false
+end
+local function near_player(pos, lid, r)
+    local _, d = C.nearest_player(pos, lid)
+    return d ~= nil and d < r
+end
+local function quiet(sm, f)
+    for _, o in ipairs(C.neighbours(sm, C.cfg("trader_front_dist", 300))) do
+        local of = o.owning_faction
+        if (o.props.lair or 0) > 0 or (C.human(of) and C.enemies(f, of)) then return false end
+    end
+    return true
+end
+local function pick_shop(f)
+    local ps = C.players()
+    local lid = #ps > 0 and math.random() < C.cfg("trader_player_level", 0.7) and C.player_level(ps[math.random(#ps)])
+    local cands, w = {}, {}
+    for _, sm in ipairs(C.smarts()) do
+        local o = sm.owning_faction
+        if not C.is_base(sm) and (sm.props.lair or 0) < 1 and (not lid or C.smart_level(sm) == lid)
+            and not busy_smart(sm.id) and (o == nil or o == "none" or o == f or (C.human(o) and not C.enemies(f, o))) then
+            cands[#cands + 1] = sm
+            w[#cands] = o == f and 3 or (C.human(o) and C.friends(f, o)) and 2 or 1
+        end
+    end
+    for _ = 1, 6 do
+        local i = C.weighted(w)
+        if not i then return end
+        if quiet(cands[i], f) then return cands[i] end
+        w[i] = nil
+    end
+end
+local function pick_start(shop)
+    local lid = C.smart_level(shop)
+    if not near_player(shop.position, lid, 250) then return shop end
+    local from = {}
+    for _, sm in ipairs(C.smarts_on_level(lid)) do
+        local d = sm.position:distance_to(shop.position)
+        if d >= 150 and d <= 700 and not near_player(sm.position, lid, 180) then from[#from + 1] = sm end
+    end
+    return from[1] and from[math.random(#from)]
+end
+local function guards_for(tier)
+    if tier == 1 then return math.random() < 0.6 and 0 or 1 end
+    if tier == 2 then return math.random(1, 2) end
+    return math.random(2, 4)
+end
+local function open_shop()
+    if not on() or not C.ready("trader") then return end
+    C.cooldown("trader", 0.5)
+    local n = 0
+    for id in pairs(traders()) do
+        if C.live_squad(id) then n = n + 1 end
+    end
+    if n >= C.cfg("trader_max", 6) or math.random() > C.cfg("trader_chance", 0.35) then return end
+    local fs = E.factions(function(f) return TRADES[f] ~= nil end)
+    local f = E.pick(fs)
+    local shop = f and pick_shop(f)
+    local from = shop and pick_start(shop)
+    if not from then return end
+    if C.crowded() and near_player(shop.position, C.smart_level(shop), 400) then return end
+    open(f, shop, from, C.cfg("trader_life_h", 24) * C.rand(0.6, 1.4), math.random() < C.cfg("trader_mark_chance", 0.5))
+end
+function open(f, shop, from, life_h, announce, caravan, opts)
+    opts = opts or {}
+    local ttype = C.weighted(TRADES[f])
+    local tier = tonumber(C.weighted(TIERS))
+    local scope = opts.scope
+        or (math.random() < C.cfg("trader_free_chance", 0.15) and "free" or C.weighted(SCOPES[f] or SCOPE_DEFAULT))
+    local out = {}
+    local sq = E.squad(out, E.squad_section(f, TIER_SQUAD[tier]), from, shop)
+    if not sq then return out end
+    local keep = guards_for(tier)
+    local extra = {}
+    for m in sq:squad_members() do
+        if m.id ~= sq:commander_id() then extra[#extra + 1] = m.id end
+    end
+    for i = keep + 1, #extra do sq:remove_npc(extra[i], true) end
+    local rec = { f = f, type = ttype, tier = tier, scope = scope, smart = shop.id, cmd = sq:commander_id(),
+        name = C.name_of(sq:commander_id()), until_t = C.now() + life_h * C.HOUR, caravan = caravan, post = opts.post }
+    if not opts.post and scope ~= "free" and tier >= 2 and f ~= "killer" and C.human("killer") and not C.enemies("killer", f)
+        and math.random() < (tier == 3 and 0.5 or 0.25) then
+        local m = E.squad(out, E.squad_section("killer", "advanced"), from, shop)
+        if m then rec.mercs = m.id end
+    end
+    traders()[sq.id] = rec
+    for _, s in ipairs(out) do
+        C.shield(s, life_h + 4, "watch")
+        C.spare(s.id, life_h + 4)
+    end
+    local where = C.smart_name(shop)
+    if announce then
+        mark(rec, shop)
+        C.report("trade", f, true, caravan and "zf_trader_caravan" or "zf_trader_open", f, "news",
+            game.translate_string("zf_trader_" .. ttype), where, C.text("zf_trade_scope_" .. scope, nil, C.faction_name(f)))
+    else
+        C.note("trade", f, C.text("zf_trader_rumor", nil, game.translate_string("zf_trader_" .. ttype), C.faction_name(f)))
+    end
+    C.log("trader: %s %s (tier %d, %s) at %s, %d guards%s", f, ttype, tier, scope, shop:name(), math.min(keep, #extra),
+        rec.mercs and " + mercs" or "")
+    return out
+end
+function caravan(ctx)
+    if not on() then return end
+    local f = E.pick(E.factions(function(x) return TRADES[x] ~= nil and not C.enemies(x, ctx.af) end))
+    local from = f and E.far(ctx)
+    local to = from and E.across(ctx, from)
+    if not (to and to.id ~= from.id) or busy_smart(to.id) then return end
+    return open(f, to, from, C.rand(2, 4), true, true)
+end
+local function close_shop(id, rec, why)
+    unmark(rec)
+    traders()[id] = nil
+    local sq = C.live_squad(id)
+    if sq and why ~= "dead" then C.send_home(sq, 12) end
+    local m = rec.mercs and C.live_squad(rec.mercs)
+    if m and sq then C.send(m, sq.current_target_id or rec.smart, 12) end
+    local gone = {}
+    if sq then gone[#gone + 1] = sq end
+    if m then gone[#gone + 1] = m end
+    if #gone > 0 then E.track("trader_gone", gone, 2) end
+end
+local function move_on(id, rec, sq)
+    local shop = alife_object(rec.smart)
+    if shop and not rec.caravan and math.random() < 0.35 then
+        local next_shop
+        for _, sm in ipairs(C.neighbours(shop, 1500, function(o)
+            return not C.is_base(o) and not busy_smart(o.id) and (o.owning_faction == rec.f or not C.enemies(rec.f, o.owning_faction))
+        end)) do
+            next_shop = sm
+            if math.random() < 0.5 then break end
+        end
+        if next_shop and C.send(sq, next_shop.id, 12) then
+            local was_marked = rec.marked
+            unmark(rec)
+            rec.smart, rec.until_t = next_shop.id, C.now() + C.cfg("trader_life_h", 24) * C.rand(0.5, 1.2) * C.HOUR
+            if was_marked then
+                mark(rec, next_shop)
+                C.report("trade", rec.f, true, "zf_trader_moved", rec.f, "news", rec.name, C.smart_name(next_shop))
+            end
+            return
+        end
+    end
+    close_shop(id, rec, "left")
+    C.log("trader %s (%s) goes home", rec.name, rec.type)
+end
+local function ambush(rec, sq, npc)
+    if rec.ambushed or rec.tier < 2 or math.random() > C.cfg("trader_ambush_chance", 0.03) then return end
+    local lid = C.player_level(npc)
+    if not near_player(npc:position(), lid, 300) then return end
+    local rf = E.pick(E.factions(function(x) return (x == "bandit" or x == "renegade") and C.enemies(x, rec.f) end))
+    local shop = alife_object(rec.smart)
+    if not (rf and shop) then return end
+    local from = {}
+    for _, sm in ipairs(C.smarts_on_level(lid)) do
+        local d = sm.position:distance_to(shop.position)
+        if d >= 150 and d <= 400 and not near_player(sm.position, lid, 150) then from[#from + 1] = sm end
+    end
+    if #from == 0 then return end
+    rec.ambushed = true
+    local out = {}
+    local r = E.squad(out, E.squad_section(rf, "advanced"), from[math.random(#from)], shop)
+    if not r then return end
+    E.track("trader_robbers", out, 3)
+    rec.robbers = r.id
+    C.feud(r.id, sq.id, 3)
+    if rec.mercs then C.feud(r.id, rec.mercs, 3) end
+    C.report("trade", { rf, rec.f }, true, "zf_trader_ambush", nil, "danger", C.faction_name(rf), C.smart_name(shop))
+end
+local function thank(rec, npc)
+    local p = rec.saver and C.player_by_key(rec.saver)
+    if p then
+        C.reward(p, rec.tier * 1500, "zf_trader_thanks")
+        C.note("trade", rec.f, C.text("zf_trader_saved", nil, rec.name, C.smart_name(alife_object(rec.smart))))
+    end
+end
+local function go_free(sq)
+    for _, m in ipairs(C.members_online(sq)) do
+        if character_community(m) ~= "trader" then
+            local ok, err = pcall(m.set_character_community, m, "trader", 0, 0)
+            if not ok then C.warn("free trader: %s", err) end
+        end
+    end
+end
+local function step()
+    by_npc = {}
+    local t = C.now()
+    for id, rec in pairs(traders()) do
+        local sq = C.live_squad(id)
+        local se = C.creature(rec.cmd)
+        if not (sq and se and se.group_id == id) then
+            local sm = alife_object(rec.smart)
+            if sm then
+                C.report("trade", rec.f, rec.marked and C.relevant(sm, rec.f), "zf_trader_dead", nil, "news", rec.name,
+                    C.smart_name(sm))
+            end
+            close_shop(id, rec, "dead")
+        elseif rec.post and not zf_garrison.developed(rec.smart, rec.post) then
+            close_shop(id, rec, "left")
+            C.log("trader %s leaves the post at %s", rec.name, rec.smart)
+        elseif t >= rec.until_t and rec.post then
+            rec.until_t = t + 12 * C.HOUR
+        elseif t >= rec.until_t then
+            move_on(id, rec, sq)
+        else
+            by_npc[rec.cmd] = rec
+            if not C.shield_of(id) then C.shield(sq, (rec.until_t - t) / C.HOUR + 4, "watch") end
+            if not C.store("spared")[id] then C.spare(id, (rec.until_t - t) / C.HOUR + 4) end
+            if rec.scope == "free" and sq.online then go_free(sq) end
+            if sq.assigned_target_id ~= rec.smart then C.send(sq, rec.smart, 12) end
+            local m = rec.mercs and C.live_squad(rec.mercs)
+            if m and m.assigned_target_id ~= rec.smart then C.send(m, rec.smart, 12) end
+            local npc = level.object_by_id(rec.cmd)
+            if npc and npc:alive() then
+                if trade_manager.get_trade_profile(rec.cmd, "cfg_ltx") ~= profile(rec) then
+                    trade_manager.trade_init(npc, profile(rec))
+                end
+                if not rec.stocked then
+                    rec.stocked = true
+                    npc:give_money(TIER_CASH[rec.tier] or 10000)
+                    trade_manager.update(npc, true)
+                end
+                if not rec.known and near_player(npc:position(), C.player_level(npc), 40) then
+                    rec.known = true
+                    mark(rec, alife_object(rec.smart))
+                end
+                ambush(rec, sq, npc)
+                if rec.robbers and not C.live_squad(rec.robbers) then
+                    rec.robbers = nil
+                    thank(rec, npc)
+                end
+            end
+        end
+    end
+end
+function open_post(sm, owner, free)
+    if not on() or busy_smart(sm.id) then return end
+    local n = 0
+    for _, rec in pairs(traders()) do
+        if rec.post then n = n + 1 end
+    end
+    if n >= C.cfg("post_trader_max", 4) then return end
+    local f = owner
+    if free then
+        f = E.pick(E.factions(function(x) return TRADES[x] ~= nil and not C.enemies(x, owner) end)) or owner
+    end
+    if not TRADES[f] then return end
+    local from = pick_start(sm) or sm
+    local out = open(f, sm, from, C.cfg("trader_life_h", 30), owner == warfare.actor_faction, nil,
+        { post = owner, scope = free and "free" or nil })
+    local sq = out[1]
+    return sq and traders()[sq.id] and sq.id or nil
+end
+function at_post(id)
+    local rec = id and traders()[id]
+    return rec ~= nil and rec.post ~= nil and C.live_squad(id) ~= nil
+end
+function trade_of(id)
+    local rec = id and traders()[id]
+    return rec and rec.type or ""
+end
+local function hook_trade()
+    if not trade_manager or trade_manager.__zf_traders then return end
+    trade_manager.__zf_traders = true
+    local orig = trade_manager.trade_init
+    trade_manager.trade_init = function(npc, cfg)
+        local rec = npc and by_npc[npc:id()]
+        return orig(npc, rec and profile(rec) or cfg)
+    end
+    xr_conditions.zf_trader_tier = function(actor, npc, p)
+        local rec = npc and by_npc[npc:id()]
+        return rec ~= nil and rec.tier >= (tonumber(p and p[1]) or 1)
+    end
+end
+local function my_faction()
+    local ok, f = pcall(get_actor_true_community)
+    if ok and f then return f end
+    return C.community(db.actor)
+end
+local function watch_trade()
+    local gui = ui_inventory and ui_inventory.GUI
+    if not (gui and gui.mode == "trade" and gui:IsShown()) then return end
+    local partner = gui:GetPartner()
+    local cfg = partner and trade_manager.get_trade_profile(partner:id(), "cfg_ltx")
+    local scope = cfg and cfg:match("zf_trade_[%w_]-_(%a+)%.ltx$")
+    if not scope then return end
+    local tf = (character_community(partner) or ""):gsub("^actor_", "")
+    if serves(scope, tf, my_faction()) then return end
+    gui:Close()
+    C.local_news("zf_trader_refuse_" .. scope, tf, "news", C.faction_name(tf))
+end
+local function ours(npc)
+    local cfg = npc and trade_manager.get_trade_profile(npc:id(), "cfg_ltx")
+    local scope = cfg and cfg:match("zf_trade_[%w_]-_(%a+)%.ltx$")
+    if not scope then return end
+    local tf = (character_community(npc) or ""):gsub("^actor_", "")
+    return serves(scope, tf, my_faction()), scope, tf
+end
+local function npc_of(a, b)
+    return (db.actor and a:id() == db.actor:id()) and b or a
+end
+local function hook_dialogs()
+    local d = dialogs
+    if not (d and d.is_trade_accept) or d.__zf_traders then return end
+    d.__zf_traders = true
+    local init, yes, no = d.is_trade_init_accept, d.is_trade_accept, d.is_not_trade_accept
+    d.is_trade_init_accept = function(a, b)
+        if ours(npc_of(a, b)) ~= nil then return true end
+        return init(a, b)
+    end
+    d.is_trade_accept = function(a, b)
+        local ok = ours(npc_of(a, b))
+        if ok ~= nil then return ok end
+        return yes(a, b)
+    end
+    d.is_not_trade_accept = function(a, b)
+        local ok, scope, tf = ours(npc_of(a, b))
+        if ok == nil then return no(a, b) end
+        if not ok then C.local_news("zf_trader_refuse_" .. scope, tf, "news", C.faction_name(tf)) end
+        return not ok
+    end
+end
+function list()
+    local out, t = {}, C.now()
+    for id, rec in pairs(traders()) do
+        local sq = C.live_squad(id)
+        local sm = alife_object(rec.smart)
+        if sq and sm then
+            local lvl = alife():level_name(C.smart_level(sm))
+            local m = rec.mercs and C.live_squad(rec.mercs)
+            out[#out + 1] = { name = rec.name, type = rec.type, tier = rec.tier, scope = rec.scope, f = rec.f,
+                s = C.smart_name(sm), lvl = game.translate_string(lvl or ""), guards = sq:npc_count() - 1,
+                mercs = m and m:npc_count() or 0, h = math.max(0, math.ceil((rec.until_t - t) / C.HOUR)),
+                known = rec.known or rec.marked or false, marked = rec.marked or false, sid = rec.smart,
+                post = rec.post ~= nil }
+        end
+    end
+    table.sort(out, function(a, b) return a.h > b.h end)
+    return out
+end
+local function on_npc_death(sq, se_npc, killer)
+    if not (sq and killer and C.is_player_id(killer.id)) then return end
+    local p = level.object_by_id(killer.id)
+    for _, rec in pairs(traders()) do
+        if rec.robbers == sq.id and p then rec.saver = C.player_key(p) end
+    end
+end
+function on_game_start()
+    hook_trade()
+    hook_dialogs()
+    RegisterScriptCallback("squad_on_npc_death", C.guard("zf_traders.death", on_npc_death))
+    C.every("zf_traders_open", 120, open_shop)
+    C.every("zf_traders", 10, step, true)
+    C.every_anywhere("zf_traders_watch", 0.3, watch_trade)
+    zf_front.on_update(sync_peer_spots)
+end

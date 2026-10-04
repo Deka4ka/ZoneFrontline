@@ -1,0 +1,379 @@
+local C = zf_core
+local LEAD    = { army = 0.95, dolg = 0.9, isg = 0.9, killer = 0.85, monolith = 0.8, csky = 0.7, greh = 0.6,
+                  freedom = 0.6, bandit = 0.6, stalker = 0.5, ecolog = 0.5, renegade = 0.4 }
+local RADIO   = { army = 0.7, isg = 0.6, dolg = 0.5, killer = 0.5, csky = 0.4, freedom = 0.3, ecolog = 0.3,
+                  stalker = 0.15, bandit = 0.08, renegade = 0.05 }
+local MEDIC   = { ecolog = 0.6, csky = 0.4, dolg = 0.4, army = 0.4, isg = 0.35, stalker = 0.3, freedom = 0.3,
+                  killer = 0.3, monolith = 0.15, bandit = 0.1, renegade = 0.1, greh = 0.1 }
+local SAPPER  = { isg = 0.4, army = 0.35, killer = 0.3, dolg = 0.25, monolith = 0.2, freedom = 0.15, csky = 0.15,
+                  greh = 0.1, renegade = 0.1, bandit = 0.08 }
+local GRENADE = { army = 0.3, dolg = 0.3, monolith = 0.3, isg = 0.3, killer = 0.25, greh = 0.2, freedom = 0.2,
+                  renegade = 0.15, csky = 0.15, stalker = 0.1, bandit = 0.1 }
+local ASSAULT = { dolg = 0.4, monolith = 0.4, army = 0.3, isg = 0.3, killer = 0.3, greh = 0.3, freedom = 0.25,
+                  bandit = 0.25, renegade = 0.2, stalker = 0.15, csky = 0.15 }
+local SURRENDER = { commander = 0.4, assault = 0.3, grenadier = 0.9, radio = 1.0, sapper = 1.0,
+                    sniper = 1.2, medic = 1.3 }
+PRISONER_PAY = { commander = 2.0, radio = 1.5 }
+local role = {}
+local pending = {}
+local regroup = {}
+local scene_cd = {}
+local said = 0
+function enabled()
+    return C.cfg("cls_enabled", true)
+end
+function commander_of(sq)
+    local f, id = sq:get_squad_community(), sq:commander_id()
+    if not (LEAD[f] and id and sq:npc_count() >= 3) then return end
+    local se = alife_object(id)
+    if not se then return end
+    local r = C.rank_level(se)
+    local p = LEAD[f] * (r >= 3 and 1 or r == 2 and 0.3 or 0)
+    if C.hash(sq.id, 11) < p then return id end
+end
+local function pick(sq, salt, exclude, min_rank)
+    local best, bh
+    for m in sq:squad_members() do
+        local se = not exclude[m.id] and alife_object(m.id)
+        if se and C.rank_level(se) >= min_rank then
+            local h = C.hash(m.id, salt)
+            if not bh or h < bh then best, bh = m.id, h end
+        end
+    end
+    return best
+end
+function radio_of(sq)
+    local f = sq:get_squad_community()
+    if not RADIO[f] or sq:npc_count() < 3 or C.hash(sq.id, 23) >= RADIO[f] then return end
+    if (C.store("no_radio")[sq.id] or 0) > C.now() then return end
+    return pick(sq, 23, { [sq:commander_id()] = true }, 2)
+end
+function medic_of(sq)
+    local f = sq:get_squad_community()
+    if not MEDIC[f] or sq:npc_count() < 2 or C.hash(sq.id, 37) >= MEDIC[f] then return end
+    return pick(sq, 37, { [sq:commander_id()] = true, [radio_of(sq) or -1] = true }, 1)
+end
+local function squad_role(sq, id)
+    if commander_of(sq) == id then return "commander" end
+    if radio_of(sq) == id then return "radio" end
+    if medic_of(sq) == id then return "medic" end
+end
+function squad_command(sq)
+    if not enabled() then return end
+    if (C.store("leaderless")[sq.id] or 0) > C.now() then return "leaderless" end
+    if commander_of(sq) then return "led" end
+end
+function has_radio(sq)
+    return enabled() and radio_of(sq) ~= nil
+end
+local function classify(npc)
+    local id = npc:id()
+    local sq = C.squad_of(id)
+    local r = sq and squad_role(sq, id)
+    if r then return r end
+    local f, rank = C.community(npc), C.rank_level(npc)
+    local w = npc:active_item() or npc:item_in_slot(3)
+    if w and IsSniper(w) and rank >= 2 then return "sniper" end
+    local outfit = npc:item_in_slot(7)
+    local heavy = outfit and ini_sys:r_string_ex(outfit:section(), "kind") == "o_heavy"
+    if (heavy and C.hash(id, 61) < 0.6) or (w and IsShotgun(w) and rank >= 3 and C.hash(id, 61) < (ASSAULT[f] or 0)) then
+        return "assault"
+    end
+    if (w and IsLauncher(w)) or (rank >= 3 and C.hash(id, 53) < (GRENADE[f] or 0)) then return "grenadier" end
+    if rank >= 3 and C.hash(id, 41) < (SAPPER[f] or 0) then return "sapper" end
+    return false
+end
+function class_of(id)
+    if not enabled() then return end
+    local r = role[id]
+    if r ~= nil then return r or nil end
+    local sq = C.squad_of(id)
+    return sq and squad_role(sq, id) or nil
+end
+function surrender_factor(npc)
+    local id = npc:id()
+    local c = class_of(id)
+    local k = SURRENDER[c] or 1
+    local sq = C.squad_of(id)
+    local cmd = sq and squad_command(sq)
+    if cmd == "leaderless" then k = k * 1.5 elseif cmd == "led" and c ~= "commander" then k = k * 0.7 end
+    return k
+end
+local function kit(npc, r)
+    if r == "medic" and not npc:object("medkit") then
+        C.give(npc, "medkit", 2)
+        C.give(npc, "bandage", 2)
+    elseif (r == "grenadier" or r == "sapper") and not npc:object("grenade_f1") and not npc:object("grenade_rgd5") then
+        C.give(npc, math.random() < 0.5 and "grenade_f1" or "grenade_rgd5", r == "sapper" and 3 or 2)
+    end
+end
+local function set_role(npc, r, first)
+    local id = npc:id()
+    role[id] = r
+    if r == "sniper" then
+        local st = db.storage[id]
+        local cst = st and st.combat
+        if st and st.script_combat_type == nil then st.script_combat_type = "camper" end
+        if cst and cst.script_combat_type == nil then cst.script_combat_type = "camper" end
+    end
+    if first and r then kit(npc, r) end
+end
+local function eligible(npc)
+    if not (npc and npc:alive() and IsStalker(npc)) then return false end
+    local id = npc:id()
+    if get_object_story_id(id) or npc:has_info("npcx_is_companion") or C.is_player(npc) then return false end
+    return C.human(C.community(npc))
+end
+local function on_net_spawn(npc)
+    if npc then pending[npc:id()] = time_global() + 3000 end
+end
+local function on_net_destroy(npc)
+    local id = npc and npc:id()
+    if id then role[id], pending[id], scene_cd[id] = nil, nil, nil end
+end
+local function hook_combat_type()
+    if not (xr_combat and xr_combat.set_combat_type) or xr_combat.__zf_hooked then return end
+    xr_combat.__zf_hooked = true
+    local orig = xr_combat.set_combat_type
+    xr_combat.set_combat_type = function(npc, actor, t)
+        orig(npc, actor, t)
+        if t and t.script_combat_type == nil and role[npc:id()] == "sniper" and enabled() then
+            t.script_combat_type = "camper"
+            db.storage[npc:id()].script_combat_type = "camper"
+        end
+    end
+end
+local function on_before_hit(npc, shit)
+    if role[npc:id()] == "assault" and enabled() then shit.power = shit.power * C.cfg("assault_armor", 0.8) end
+end
+function on_death(sq, se_npc, killer)
+    if not enabled() then return end
+    local id = se_npc.id
+    local r = squad_role(sq, id)
+    if r == "commander" then
+        C.store("leaderless")[sq.id] = C.now() + C.cfg("cmd_leaderless_h", 2) * C.HOUR
+    elseif r == "radio" then
+        C.store("no_radio")[sq.id] = C.now() + 72 * C.HOUR
+    end
+    local body = level.object_by_id(id)
+    if body and (r == "commander" or r == "radio") then
+        C.store("intel")[id] = { f = sq:get_squad_community(), until_t = C.now() + 2 * C.HOUR }
+    end
+    if r == "commander" and sq.online and killer and C.is_player_id(killer.id) and time_global() - said > 60000 then
+        said = time_global()
+        C.report("war", sq:get_squad_community(), true, "zf_cls_cmd_down", nil, "news")
+    end
+    role[id] = nil
+    if sq.online then regroup[sq.id] = true end
+    return r
+end
+local function intel_text(f)
+    for _, op in pairs(C.store("ops")) do
+        local t = op.f == f and alife_object(op.target)
+        if t then return "zf_intel_op", C.smart_name(t), game.translate_string("zf_tactic_" .. op.tactic) end
+    end
+    for id, p in pairs(C.store("counter")) do
+        local t = p.f == f and alife_object(id)
+        if t then return "zf_intel_counter", C.smart_name(t) end
+    end
+    local best, n = nil, 0
+    for _, sm in ipairs(C.smarts()) do
+        if C.is_base(sm) and sm.owning_faction == f then
+            local g = C.garrison_of(f)[sm.id] or 0
+            if g > n then best, n = sm, g end
+        end
+    end
+    if best then return "zf_intel_garrison", C.smart_name(best), n end
+end
+function reveal(f, player)
+    local key, a, b = intel_text(f)
+    if not key then return end
+    C.report("war", f, true, key, f, "news", C.faction_name(f), a, b)
+    if player then
+        C.reward(player, C.rand(C.cfg("intel_pay_min", 300), C.cfg("intel_pay_max", 900)), "zf_news_intel_pay")
+    end
+    local af = warfare.actor_faction
+    for _, op in pairs(C.store("ops")) do
+        if op.f == f and af then C.store("scouted")[af .. "|" .. op.target] = C.now() + 24 * C.HOUR end
+    end
+end
+local function search_bodies()
+    if not enabled() then return end
+    local intel = C.store("intel")
+    if next(intel) == nil then return end
+    local t, reach = C.now(), C.cfg("capture_dist", 2.5)
+    local ps = C.players()
+    for id, e in pairs(intel) do
+        local body = level.object_by_id(id)
+        if not body or t > e.until_t then
+            intel[id] = nil
+        else
+            for _, p in ipairs(ps) do
+                if intel[id] and p:position():distance_to(body:position()) <= reach then
+                    intel[id] = nil
+                    reveal(e.f, p)
+                end
+            end
+        end
+    end
+end
+local function mines()
+    return C.store("mines")
+end
+local function count_mines(by)
+    local n = 0
+    for _, m in pairs(mines()) do
+        if not by or m.by == by then n = n + 1 end
+    end
+    return n
+end
+local function lay_mine(npc)
+    local p = npc:position()
+    local a = math.random() * 2 * math.pi
+    local lvid = level.vertex_id(vector():set(p.x + math.cos(a) * 1.5, p.y, p.z + math.sin(a) * 1.5))
+    if not lvid or lvid >= 4294967295 then lvid = npc:level_vertex_id() end
+    local pos = level.vertex_position(lvid)
+    local se = alife_create("grenade_f1", pos, lvid, npc:game_vertex_id())
+    if not se then return end
+    mines()[se.id] = { f = C.community(npc), by = npc:id(), x = pos.x, y = pos.y, z = pos.z,
+        lid = C.player_level(npc), gvid = npc:game_vertex_id(), t = C.now() }
+    C.log("sapper %s laid a tripwire", npc:name())
+end
+local planting = {}
+local function triggers(f, ps)
+    local out = {}
+    for _, p in ipairs(ps) do
+        if not C.friends(f, C.community(p)) then out[#out + 1] = p:position() end
+    end
+    for _, id in pairs(db.OnlineStalkers) do
+        local o = level.object_by_id(id)
+        if o and o:alive() and C.enemies(f, C.community(o)) then out[#out + 1] = o:position() end
+    end
+    for _, o in ipairs(C.monsters_online()) do out[#out + 1] = o:position() end
+    return out
+end
+local function watch_mines()
+    if not enabled() then return end
+    local t = time_global()
+    for id, due in pairs(planting) do
+        if t >= due then
+            planting[id] = nil
+            local npc = level.object_by_id(id)
+            if npc and npc:alive() then lay_mine(npc) end
+        end
+    end
+    local list = mines()
+    if next(list) == nil then return end
+    local ps, now, r = C.players(), C.now(), C.cfg("mine_radius", 2.0)
+    local life = C.cfg("mine_life_h", 24) * C.HOUR
+    local who = {}
+    for mid, m in pairs(list) do
+        local se = alife_object(mid)
+        if not se or se.parent_id ~= 65535 then
+            list[mid] = nil
+        else
+            local pos = vector():set(m.x, m.y, m.z)
+            local near = C.nearest_player(pos, m.lid)
+            local d = near and near:position():distance_to(pos)
+            if now - m.t > life and not (d and d < 50) then
+                list[mid] = nil
+                alife_release(se)
+            elseif d and d < 150 then
+                who[m.f] = who[m.f] or triggers(m.f, ps)
+                for _, q in ipairs(who[m.f]) do
+                    if list[mid] and q:distance_to(pos) <= r then
+                        list[mid] = nil
+                        alife_release(se)
+                        zf_artillery.blast(pos, m.gvid, 400)
+                        C.log("tripwire went off")
+                    end
+                end
+            end
+        end
+    end
+end
+local function near_players(npc, radius)
+    local p, d = C.nearest_player(npc:position(), C.player_level(npc))
+    return p ~= nil and d <= radius
+end
+local function cooled(id, seconds)
+    local t = time_global()
+    if (scene_cd[id] or 0) > t then return false end
+    scene_cd[id] = t + seconds * 1000
+    return true
+end
+local function treat(npc)
+    local sq = C.squad_of(npc:id())
+    if not sq then return end
+    local pos, range = npc:position(), C.cfg("medic_range", 25)
+    for _, m in ipairs(C.members_online(sq)) do
+        if m:id() ~= npc:id() and m:position():distance_to(pos) <= range then
+            if xr_wounded.is_wounded(m) then
+                if not cooled(npc:id(), 20) then return end
+                alife_create_item("medkit_script", m)
+                xr_wounded.unlock_medkit(m)
+                C.act(npc, "remark@zf_dress", 6)
+                C.log("medic %s gets %s back up", npc:name(), m:name())
+                return
+            elseif m.health < 0.5 then
+                if not cooled(npc:id(), 15) then return end
+                m:set_health_ex(math.min(1, m.health + 0.25))
+                C.act(npc, "remark@zf_dress", 5)
+                return
+            end
+        end
+    end
+end
+local function camp_still(npc)
+    local sq = C.squad_of(npc:id())
+    local at = sq and sq.current_action == 1 and alife_object(sq.current_target_id)
+    return at and at.position and C.level_of(at) == C.player_level(npc) and npc:position():distance_to(at.position) < 60
+end
+local function field_work()
+    if not enabled() then return end
+    local t, n = time_global(), 0
+    for id, now_since in pairs(pending) do
+        if t >= now_since and n < 15 then
+            n = n + 1
+            pending[id] = nil
+            local npc = level.object_by_id(id)
+            if eligible(npc) then set_role(npc, classify(npc), true) end
+        end
+    end
+    for sid in pairs(regroup) do
+        regroup[sid] = nil
+        local sq = C.live_squad(sid)
+        for _, m in ipairs(sq and C.members_online(sq) or {}) do
+            if eligible(m) then set_role(m, classify(m), false) end
+        end
+    end
+    for id, r in pairs(role) do
+        local npc = r and level.object_by_id(id)
+        if npc and npc:alive() and not zf_captive.is_captive(id) then
+            if r == "medic" then
+                treat(npc)
+            elseif r == "commander" and near_players(npc, 60) and C.can_act(npc) and cooled(id, 90)
+                and math.random() < 0.4 then
+                C.act(npc, "remark@zf_orders", 6)
+            elseif r == "sapper" and C.can_act(npc) and camp_still(npc)
+                and count_mines(id) < C.cfg("sapper_mines", 2) and count_mines() < C.cfg("mines_max", 16)
+                and cooled(id, 600) then
+                if C.act(npc, "remark@zf_dynamite", 6) then planting[id] = t + 5000 end
+            end
+        end
+    end
+end
+function radio_scene(sq)
+    local id = radio_of(sq)
+    local npc = id and level.object_by_id(id)
+    if npc and cooled(id, 30) then C.act(npc, "remark@zf_radio", 8) end
+end
+function on_game_start()
+    hook_combat_type()
+    RegisterScriptCallback("npc_on_net_spawn", on_net_spawn)
+    RegisterScriptCallback("npc_on_net_destroy", on_net_destroy)
+    RegisterScriptCallback("npc_on_before_hit", on_before_hit)
+    C.every("zf_classes", 2, field_work)
+    C.every("zf_mines", 0.5, watch_mines)
+    C.every("zf_intel", 1, search_bodies, true)
+end

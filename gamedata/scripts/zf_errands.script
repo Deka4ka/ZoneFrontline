@@ -1,0 +1,860 @@
+local C = zf_core
+local E = zf_encounters
+local KINDS = {
+    hunt      = { work = { 3, 6 }, scene = "remark@zf_search" },
+    artifacts = { work = { 2, 5 }, scene = "remark@zf_probe" },
+    scout     = { work = { 2, 4 }, scene = "remark@zf_binocular" },
+    supplies  = { work = { 2, 4 } },
+    raid      = { work = { 3, 8 } },
+    quest     = { work = { 1, 3 } },
+}
+local AUTO = {
+    hunt      = { stalker = 3, dolg = 3, freedom = 2, csky = 2, killer = 1, ecolog = 1, bandit = 1 },
+    artifacts = { stalker = 4, ecolog = 3, freedom = 2, csky = 2, bandit = 2, renegade = 1 },
+    scout     = { army = 3, killer = 3, isg = 3, dolg = 2, freedom = 2, csky = 2, stalker = 1, bandit = 1,
+                  monolith = 1, greh = 1 },
+}
+local ARTIFACTS = {
+    south = { "af_medusa", "af_vyvert", "af_blood", "af_electra_sparkler", "af_cristall_flower", "af_rusty_thorn",
+              "af_sponge", "af_drops" },
+    mid   = { "af_night_star", "af_gravi", "af_mincer_meat", "af_electra_flash", "af_soul", "af_cristall",
+              "af_fuzz_kolobok", "af_bracelet", "af_ice", "af_eye" },
+    north = { "af_gold_fish", "af_electra_moonlight", "af_fireball", "af_dummy_battery", "af_dummy_glassbeads",
+              "af_glass", "af_fire", "af_black_spray", "af_full_empty" },
+}
+local REGION_DANGER = { south = 2, mid = 4, north = 7 }
+local PARTS = {
+    { "psy_dog", { "mutant_part_psevdodog_tail", "mutant_part_fang_psevdodog" } },
+    { "pseudodog", { "mutant_part_psevdodog_tail", "mutant_part_fang_psevdodog", "mutant_part_psevdodog_meat" } },
+    { "dog", { "mutant_part_dog_tail", "mutant_part_dog_meat", "mutant_part_dog_liver", "mutant_part_dog_heart" } },
+    { "boar", { "mutant_part_boar_leg", "mutant_part_tusk_boar", "mutant_part_boar_chop" } },
+    { "flesh", { "mutant_part_flesh_eye", "mutant_part_flesh_meat" } },
+    { "tushkano", { "mutant_part_tushkano_head", "mutant_part_tushkano_meat" } },
+    { "cat", { "mutant_part_cat_tail", "mutant_part_cat_claw", "mutant_part_cat_thyroid" } },
+    { "snork", { "mutant_part_snork_leg", "mutant_part_snork_hand", "mutant_part_snork_mask" } },
+    { "psysucker", { "mutant_part_psysucker_hand", "mutant_part_psysucker_meat" } },
+    { "bloodsucker", { "mutant_part_krovosos_jaw", "mutant_part_heart_bloodsucker", "mutant_part_krovosos_meat" } },
+    { "lurker", { "mutant_part_lurker_tail", "mutant_part_lurker_eye", "mutant_part_lurker_meat" } },
+    { "chimera", { "mutant_part_chimera_claw", "mutant_part_chimera_kogot", "mutant_part_heart_chimera" } },
+    { "burer", { "mutant_part_burer_hand", "mutant_part_brain_burer" } },
+    { "contr", { "mutant_part_controller_hand", "mutant_part_controller_glass" } },
+    { "zombie", { "mutant_part_zombi_hand" } },
+    { "gigant", { "mutant_part_pseudogigant_hand", "mutant_part_pseudogigant_eye" } },
+    { "fracture", { "mutant_part_fracture_hand" } },
+}
+local STRONG = { "chimera", "bloodsucker", "psysucker", "burer", "contr", "gigant", "lurker" }
+local SUPPLIES = { { "medkit", 2 }, { "bandage", 3 }, { "ammo_5.45x39_fmj", 2 }, { "ammo_9x18_fmj", 2 },
+    { "ammo_5.56x45_ss190", 1 }, { "ammo_12x70_buck", 1 }, { "conserva", 2 }, { "antirad", 1 }, { "stimpack", 1 } }
+local AMMO = { "ammo_5.45x39_fmj", "ammo_5.56x45_ss190", "ammo_9x18_fmj", "ammo_12x70_buck" }
+local scene_t = {}
+local function errands()
+    return C.store("errands")
+end
+local function existing(list)
+    local out = {}
+    for _, s in ipairs(list) do
+        if ini_sys:section_exist(s) then out[#out + 1] = s end
+    end
+    return out
+end
+local function has(sec, list)
+    for _, k in ipairs(list) do
+        if sec:find(k, 1, true) then return true end
+    end
+    return false
+end
+local function strength(sq)
+    local s = 0
+    for m in sq:squad_members() do
+        local se = alife_object(m.id)
+        if se then s = s + C.rank_level(se) end
+    end
+    return s
+end
+local function item_name(sec)
+    return game.translate_string(ini_sys:r_string_ex(sec, "inv_name") or sec)
+end
+local function list_items(secs)
+    local n, order = {}, {}
+    for _, s in ipairs(secs) do
+        if not n[s] then order[#order + 1] = s end
+        n[s] = (n[s] or 0) + 1
+    end
+    local out = {}
+    for _, s in ipairs(order) do out[#out + 1] = item_name(s) .. (n[s] > 1 and (" x" .. n[s]) or "") end
+    return #out > 0 and table.concat(out, ", ") or game.translate_string("zf_nothing")
+end
+local function within(sm, gp, lo, hi)
+    local p = C.smart_gpos(sm)
+    local d = p and C.d2(p, gp)
+    return d and d >= lo * lo and d <= hi * hi, d
+end
+local TARGET = {}
+function TARGET.hunt(gp, radius)
+    local g = zf_fauna.hunting_grounds(gp, radius)[1]
+    if not g then return end
+    return g.sm, 3 + g.lvl * 2 + (has(g.sec, STRONG) and 4 or 0), { lair = g.sm.id, prey = g.sec }
+end
+function TARGET.artifacts(gp, radius, side)
+    local list = {}
+    for _, sm in ipairs(C.smarts()) do
+        if not C.is_base(sm) and (sm.props.lair or 0) < 1 and not C.enemies(side, sm.owning_faction)
+            and within(sm, gp, 300, radius) then
+            list[#list + 1] = sm
+        end
+    end
+    local sm = list[1] and list[math.random(#list)]
+    if not sm then return end
+    local region = E.region(C.smart_level(sm))
+    return sm, REGION_DANGER[region], { region = region }
+end
+function TARGET.scout(gp, radius, side)
+    local best, bd
+    for _, sm in ipairs(C.smarts()) do
+        local o = sm.owning_faction
+        if C.is_base(sm) and C.human(o) and C.enemies(side, o) then
+            local ok, d = within(sm, gp, 0, radius)
+            if ok and (not bd or d < bd) then best, bd = sm, d end
+        end
+    end
+    if not best then return end
+    local spot = C.neighbours(best, 400, function(o)
+        return not C.is_base(o) and not C.enemies(side, o.owning_faction)
+    end)[1]
+    if not spot then return end
+    local o = best.owning_faction
+    return spot, 3 + (C.garrison_of(o)[best.id] or 0), { base = best.id }
+end
+function TARGET.supplies(gp, radius, side)
+    local best, bd
+    for _, sm in ipairs(C.smarts()) do
+        local o = sm.owning_faction
+        if C.is_base(sm) and o and C.friends(side, o) then
+            local ok, d = within(sm, gp, 0, radius * 2)
+            if ok and (not bd or d < bd) then best, bd = sm, d end
+        end
+    end
+    return best, 1, {}
+end
+function TARGET.raid(gp, radius, side)
+    local best, bd
+    for _, sm in ipairs(C.smarts()) do
+        local o = sm.owning_faction
+        if not C.is_base(sm) and C.human(o) and C.enemies(side, o) then
+            local ok, d = within(sm, gp, 0, radius)
+            if ok and (not bd or d < bd) then best, bd = sm, d end
+        end
+    end
+    if not best then return end
+    local o = best.owning_faction
+    return best, 3 + 3 * (C.garrison_of(o)[best.id] or 0), { enemy = o }
+end
+local function begin(sq, kind, target, danger, extra, side, owner, hired)
+    local t = C.now()
+    local e = { kind = kind, comp = (owner ~= nil and not hired) or nil, hired = hired or nil, owner = owner, side = side,
+        f = sq:get_squad_community(),
+        target = target.id, home = sq.current_target_id, phase = "go", deadline = t + C.cfg("err_travel_h", 18) * C.HOUR,
+        danger = danger, sec = sq:section_name(), name = C.name_of(sq:commander_id()), n0 = sq:npc_count() }
+    for k, v in pairs(extra) do e[k] = v end
+    if not C.send(sq, target.id, 72) then return end
+    errands()[sq.id] = e
+    C.log("errand %s: %s squad %s -> %s (danger %d)", kind, e.f, sq.id, target:name(), danger)
+    if not e.comp and target:clsid() == clsid.smart_terrain then
+        C.note("life", e.f, C.text("zf_j_errand_" .. kind, e.f, C.faction_name(e.f), C.smart_name(target)))
+    end
+    return e
+end
+local function target_of(e)
+    local o = alife_object(e.target)
+    if o and o:clsid() == clsid.smart_terrain then return o end
+    return C.live_squad(e.target)
+end
+local function finish(id)
+    errands()[id] = nil
+    C.store("busy")[id] = nil
+    scene_t[id] = nil
+end
+local function arrived(sq, target)
+    if sq.current_target_id ~= target.id then return false end
+    local smart = target:clsid() == clsid.smart_terrain
+    if smart and sq.current_action == 1 then return true end
+    local p, q = C.gpos(sq), smart and C.smart_gpos(target) or C.gpos(target)
+    local r = smart and 60 or 80
+    return p ~= nil and q ~= nil and C.d2(p, q) <= r * r
+end
+local function return_point(e)
+    local p = C.player_by_key(e.owner) or db.actor
+    local pos, best, bd = p:position(), nil, nil
+    for _, sm in ipairs(C.smarts_on_level(C.player_level(p))) do
+        local d = sm.position:distance_to(pos)
+        if not bd or d < bd then best, bd = sm, d end
+    end
+    return best
+end
+local function head_back(sq, e)
+    e.phase = "back"
+    e.deadline = C.now() + C.cfg("err_travel_h", 18) * C.HOUR
+    local to
+    if e.comp then to = return_point(e) else to = alife_object(e.home or -1) end
+    if not (to and to:clsid() == clsid.smart_terrain) then
+        local gp = C.gpos(sq)
+        to = gp and C.nearest_own_base(e.f, gp, nil, true)
+    end
+    e.ret, e.ret_t = to and to.id, C.now()
+    if to then C.send(sq, to.id, 72) end
+end
+local function scenes(sq, e)
+    local scene = KINDS[e.kind].scene
+    local t = time_global()
+    if not (scene and sq.online) or (scene_t[sq.id] or 0) > t then return end
+    scene_t[sq.id] = t + 60000
+    for _, m in ipairs(C.members_online(sq)) do
+        if math.random() < 0.6 then C.act(m, scene, 25) end
+    end
+end
+local function parts_of(prey)
+    for _, pair in ipairs(PARTS) do
+        if prey:find(pair[1], 1, true) then return existing(pair[2]) end
+    end
+    return existing({ "mutant_part_general" })
+end
+local QTYPE = { bounty_task = "bounty", assault_task_status_functor = "assault",
+    actor_has_fetch_item = "fetch", actor_has_fetch_weapon_warfare = "fetch" }
+local GREED = { renegade = 0.2, bandit = 0.15, killer = 0.05, freedom = 0.03, stalker = 0.02 }
+local function task_of(id)
+    local tm = task_manager.get_task_manager()
+    return tm and tm.task_info[id]
+end
+local function title_of(tsk, id)
+    return game.translate_string(tsk.current_title or tsk.title or id)
+end
+function doable_tasks()
+    local tm = task_manager.get_task_manager()
+    local busy, out = {}, {}
+    for _, e in pairs(errands()) do
+        if e.task then busy[e.task] = true end
+    end
+    for id, tsk in pairs(tm and tm.task_info or {}) do
+        local q = QTYPE[tsk.status_functor or ""]
+        if q and not busy[id] and not tsk.storyline and (tsk.stage or 0) == 0 then
+            out[#out + 1] = { id = id, q = q, title = title_of(tsk, id) }
+        end
+    end
+    table.sort(out, function(a, b) return a.id < b.id end)
+    return out
+end
+local function quest_plan(task_id, q, side, gp)
+    if q == "bounty" then
+        local vid = axr_task_manager.bounties_by_id[task_id]
+        local v = C.creature(vid)
+        local vsq = v and C.squad_of(v)
+        if not vsq then return end
+        local danger = C.rank_level(v) * 2 + (vsq:npc_count() - 1) * 2
+        local at = alife_object(vsq.current_target_id or -1)
+        if at and C.is_base(at) then danger = danger + 3 end
+        return vsq, danger, { victim = vid }
+    elseif q == "assault" then
+        local var = load_var(db.actor, task_id)
+        local s = var and var.smart_id and SIMBOARD.smarts[var.smart_id]
+        local sm = s and s.smrt
+        if not sm then return end
+        local danger = 2
+        for sid in pairs(s.squads) do
+            local o = C.live_squad(sid)
+            local of = o and o:get_squad_community()
+            if of and (of == "monster" or C.enemies(side, of)) then danger = danger + o:npc_count() * 1.5 end
+        end
+        return sm, danger, { site = sm.id }
+    elseif q == "fetch" then
+        local sec = load_var(db.actor, task_id .. "_fetch")
+        if not (sec and ini_sys:section_exist(sec)) then return end
+        local n = load_var(db.actor, task_id .. "_fetch_count") or 1
+        local value = (ini_sys:r_float_ex(sec, "cost") or 1000) * n
+        local how = sec:find("^af_") and "artifacts" or sec:find("^mutant_part_") and "hunt" or "supplies"
+        local target, d = TARGET[how](gp, C.cfg("err_radius", 1500), side)
+        if not target then return end
+        return target, d + math.min(8, math.floor(value / 2500)), { want = sec, want_n = n, value = value }
+    end
+end
+local function quest_strength(sq, q)
+    local s, seen = 0, false
+    for _, m in ipairs(C.members_online(sq)) do
+        seen = true
+        s = s + C.rank_level(m)
+        local w = m:active_item() or m:item_in_slot(3)
+        if q == "bounty" and w and IsSniper(w) then s = s + 2 end
+        if q == "assault" then
+            local outfit = m:item_in_slot(7)
+            local heavy = outfit and ini_sys:r_string_ex(outfit:section(), "kind") == "o_heavy"
+            if heavy or (w and IsShotgun(w)) then s = s + 2 end
+        end
+        if m:object("medkit") then s = s + 0.5 end
+    end
+    if not seen then s = strength(sq) end
+    if zf_classes.commander_of(sq) then s = s + 2 end
+    if zf_classes.medic_of(sq) then s = s + 1 end
+    return s
+end
+local function chance(str, danger)
+    return math.max(0.08, math.min(0.9, 0.25 + (str - danger) * 0.05))
+end
+local function kill_unseen(id, killer)
+    local se = C.creature(id)
+    if not se then return end
+    if not se.online then return se:on_death(killer) end
+    local obj = level.object_by_id(id)
+    local k = killer and level.object_by_id(killer.id)
+    if obj and obj:alive() then obj:kill(k or obj) end
+end
+local function watched(pos, lid)
+    local _, d = C.nearest_player(pos, lid)
+    return d ~= nil and d < C.cfg("quest_watch_dist", 250)
+end
+local function resolve_quest(sq, e)
+    local tsk = task_of(e.task)
+    local str = (e.str or strength(sq)) * sq:npc_count() / math.max(1, e.n0 or 1)
+    local p = chance(str, e.danger)
+    local roll = math.random()
+    local killer = alife_object(sq:commander_id())
+    e.ok, e.part, e.loot, e.money, e.undecided = false, false, {}, 0, nil
+    if not tsk or (tsk.stage or 0) ~= 0 then
+        e.gone = not tsk
+        e.ok = tsk ~= nil and e.q ~= "fetch"
+        return
+    end
+    if e.q == "bounty" then
+        local v = C.creature(e.victim)
+        if not v then e.ok = true return end
+        local vo = v.online and level.object_by_id(v.id)
+        if vo and watched(vo:position(), C.player_level(vo)) then
+            e.undecided = true
+            return
+        end
+        if roll < p then
+            tsk.stage = 1
+            kill_unseen(v.id, killer)
+            e.ok = true
+        end
+    elseif e.q == "assault" then
+        local s = SIMBOARD.smarts[e.site]
+        local site = alife_object(e.site)
+        local foes = {}
+        for sid in pairs(s and s.squads or {}) do
+            local o = C.live_squad(sid)
+            local of = o and o:get_squad_community()
+            if of and o.id ~= sq.id and (of == "monster" or C.enemies(e.side, of)) then
+                for m in o:squad_members() do foes[#foes + 1] = m.id end
+            end
+        end
+        if #foes == 0 then e.ok = true return end
+        if site and watched(site.position, C.smart_level(site)) then
+            e.undecided = true
+            return
+        end
+        local share = roll < p and 1 or roll < p * 1.6 and 0.5 or 0
+        for i = 1, math.floor(#foes * share + 0.5) do kill_unseen(foes[i], killer) end
+        e.ok, e.part = share == 1, share == 0.5
+    elseif e.q == "fetch" then
+        local n = roll < p and e.want_n or (roll < p * 1.5 and e.want_n > 1) and math.floor(e.want_n / 2) or 0
+        for _ = 1, n do e.loot[#e.loot + 1] = e.want end
+        e.ok, e.part = n == e.want_n, n > 0 and n < e.want_n
+        if e.ok and e.value >= C.cfg("quest_greed_value", 5000) and math.random() < (GREED[e.f] or 0.01) then
+            e.deserted = true
+        end
+    end
+end
+local function resolve(sq, e)
+    if e.kind == "quest" then
+        resolve_quest(sq, e)
+        if e.undecided then return end
+        if not sq.online and C.live_squad(sq.id) then
+            local k = e.ok and (e.danger > (e.str or 0) and 0.25 or 0.08) or 0.35
+            local dead = {}
+            for m in sq:squad_members() do
+                if math.random() < k then dead[#dead + 1] = m.id end
+            end
+            for _, id in ipairs(dead) do
+                if C.live_squad(sq.id) then sq:remove_npc(id, true) end
+            end
+        end
+        return
+    end
+    local str = strength(sq)
+    local p = math.max(0.1, math.min(0.92, 0.3 + (str - e.danger) * 0.06))
+    local target = target_of(e)
+    if e.kind == "raid" and target and not C.enemies(e.side, target.owning_faction) then p = 1 end
+    local ok = math.random() < p
+    if not sq.online then
+        local k = ok and (e.danger > str and 0.2 or 0.05) or 0.3
+        local dead = {}
+        for m in sq:squad_members() do
+            if math.random() < k then dead[#dead + 1] = m.id end
+        end
+        for _, id in ipairs(dead) do
+            if C.live_squad(sq.id) then sq:remove_npc(id, true) end
+        end
+    end
+    e.ok, e.loot, e.money = ok, {}, 0
+    if not ok then return end
+    local tname = target and C.smart_name(target) or ""
+    if e.kind == "hunt" then
+        local parts = parts_of(e.prey or "")
+        for _ = 1, math.random(2, 4) do
+            if #parts > 0 then e.loot[#e.loot + 1] = parts[math.random(#parts)] end
+        end
+        e.cleared = zf_fauna.hunted(e.lair, e.comp and e.owner or nil)
+        if not e.comp and e.cleared and target then
+            C.report("fauna", e.f, C.relevant(target, e.f) and math.random() < 0.5, "zf_err_rumor_hunt", e.f, "news",
+                C.faction_name(e.f), tname)
+        end
+    elseif e.kind == "artifacts" then
+        local pool = existing(ARTIFACTS[e.region or "mid"])
+        for _ = 1, (str >= 12 and math.random() < 0.35) and 2 or 1 do
+            if #pool > 0 then e.loot[#e.loot + 1] = pool[math.random(#pool)] end
+        end
+        if not e.comp then
+            local se = alife_object(sq:commander_id())
+            for _, sec in ipairs(e.loot) do if se then alife_create_item(sec, se) end end
+            e.robbable = #e.loot > 0
+            if target then
+                C.report("life", e.f, C.relevant(target, e.f) and math.random() < 0.3, "zf_err_rumor_af", nil, "news",
+                    C.faction_name(e.f), tname)
+            end
+        end
+    elseif e.kind == "scout" then
+        local base = alife_object(e.base or -1)
+        if base then
+            C.store("scouted")[e.side .. "|" .. base.id] = C.now() + 24 * C.HOUR
+            e.intel = { C.smart_name(base), C.garrison_of(base.owning_faction)[base.id] or 0 }
+            if not e.comp then
+                local mine = base.owning_faction == warfare.actor_faction
+                C.report("war", { e.f, base.owning_faction }, mine and math.random() < 0.5, "zf_err_spotted",
+                    base.owning_faction, "danger", C.faction_name(e.f), C.smart_name(base))
+            end
+        end
+        e.money = C.cfg("err_scout_pay", 800)
+    elseif e.kind == "supplies" then
+        for _, s in ipairs(SUPPLIES) do
+            for _ = 1, s[2] do e.loot[#e.loot + 1] = s[1] end
+        end
+        e.loot = existing(e.loot)
+    elseif e.kind == "raid" then
+        e.money = C.cfg("err_raid_pay", 1500)
+        local ammo = existing(AMMO)
+        for _ = 1, 2 do
+            if #ammo > 0 then e.loot[#e.loot + 1] = ammo[math.random(#ammo)] end
+        end
+    end
+end
+local function report(sq, e, cmd)
+    local p = C.player_by_key(e.owner) or C.nearest_player(cmd:position(), C.player_level(cmd)) or db.actor
+    local got = {}
+    for _, sec in ipairs(e.loot or {}) do
+        if C.give(cmd, sec, 1) > 0 then got[#got + 1] = sec end
+    end
+    local tgt = target_of(e)
+    local tname = tgt and tgt:clsid() == clsid.smart_terrain and C.smart_name(tgt) or ""
+    if e.kind == "quest" then
+        local key = e.gone and "zf_err_quest_gone" or e.ok and ("zf_err_back_quest_" .. e.q)
+            or e.part and ("zf_err_back_quest_part_" .. e.q) or "zf_err_back_quest_fail"
+        C.say(e.name, e.f, key, "news", e.title or "", list_items(got))
+    elseif not e.ok then
+        C.say(e.name, e.f, "zf_err_back_fail", "news", tname)
+    elseif e.kind == "scout" and e.intel then
+        C.say(e.name, e.f, "zf_err_back_scout", "news", e.intel[1], e.intel[2])
+    elseif e.kind == "raid" then
+        C.say(e.name, e.f, "zf_err_back_raid", "news", tname, list_items(got))
+    elseif e.kind == "hunt" then
+        C.say(e.name, e.f, e.cleared and "zf_err_back_hunt_cleared" or "zf_err_back_hunt", "news", tname, list_items(got))
+    else
+        C.say(e.name, e.f, "zf_err_back_items", "news", list_items(got))
+    end
+    local lost = (e.n0 or 0) - sq:npc_count()
+    if lost > 0 then C.say(e.name, e.f, "zf_err_losses", "news", lost) end
+    if (e.money or 0) > 0 then C.reward(p, e.money, "zf_news_errand_pay") end
+end
+local function deliver(owner, sec)
+    local p = C.player_by_key(owner)
+    if not p then return false end
+    if p:id() == AC_ID then
+        return C.give(db.actor, sec, 1) > 0
+    end
+    local ok = pcall(function()
+        local xp = XrrPlayers()
+        xp:SendGiftSection(xp:PlayerDummyPeerNetid(p:id()), sec, 1)
+    end)
+    return ok
+end
+local function hired_report(e)
+    local p = C.player_by_key(e.owner)
+    if e.deserted then
+        C.report("people", e.f, true, "zf_hire_deserted", nil, "danger", e.name, e.title or "")
+        return
+    end
+    local got = {}
+    for _, sec in ipairs(e.loot or {}) do
+        if deliver(e.owner, sec) then got[#got + 1] = sec end
+    end
+    local key = e.gone and "zf_err_quest_gone" or e.ok and ("zf_hire_done_" .. e.q)
+        or e.part and ("zf_hire_part_" .. e.q) or "zf_hire_fail"
+    C.say(e.name, e.f, key, "news", e.title or "", list_items(got))
+    if not (e.ok or e.part or e.gone) and p and (e.paid or 0) > 0 then
+        C.reward(p, e.paid * C.cfg("hire_refund", 0.5), "zf_hire_refund")
+    end
+end
+local function try_rejoin(sq, e)
+    if not sq.online then return false end
+    local cmd = level.object_by_id(sq:commander_id())
+    if not (cmd and cmd:alive()) then return false end
+    local p = C.player_by_key(e.owner) or db.actor
+    if not (p and C.player_level(p) == C.player_level(cmd)
+        and p:position():distance_to(cmd:position()) <= C.cfg("err_rejoin_dist", 40)) then return false end
+    dialogs_axr_companion.become_actor_companion(db.actor, cmd)
+    if not axr_companions.companion_squads[sq.id] then return false end
+    zf_coop.set_owner(sq.id, e.owner)
+    report(sq, e, cmd)
+    return true
+end
+local function lost(id, e)
+    if e.comp then C.report("people", e.f, true, "zf_err_lost", nil, "danger", e.name) end
+    if e.hired and e.phase ~= "back" then C.report("people", e.f, true, "zf_hire_lost", nil, "danger", e.name, e.title or "") end
+    C.log("errand %s of %s squad %s: lost", e.kind, e.f, id)
+    finish(id)
+end
+local function robbery(sq, e)
+    if not (e.robbable and sq.online) or e.robbed then return end
+    e.robbed = true
+    local cmd = level.object_by_id(sq:commander_id())
+    local _, d = cmd and C.nearest_player(cmd:position(), C.player_level(cmd))
+    if not (d and d < 300) or math.random() > C.cfg("err_robbery_chance", 0.35) or C.crowded() then return end
+    local r = E.pick(E.factions(function(f) return (f == "bandit" or f == "renegade") and C.enemies(f, e.f) end))
+    local here = alife_object(sq.current_target_id or -1)
+    if not (r and here and here.position) then return end
+    local from = {}
+    for _, o in ipairs(C.smarts_on_level(C.smart_level(here))) do
+        local dist = o.position:distance_to(here.position)
+        if dist >= 150 and dist <= 300 then from[#from + 1] = o end
+    end
+    if #from == 0 then return end
+    local out = {}
+    local rs = E.squad(out, E.squad_section(r, "novice"), from[math.random(#from)], here)
+    if rs then C.feud(rs.id, sq.id, 4) end
+    E.track("robbers", out, 4)
+    C.log("robbers (%s) after the seekers of squad %s", r, sq.id)
+end
+local function step()
+    if not C.cfg("err_enabled", true) then return end
+    local t = C.now()
+    for id, e in pairs(errands()) do
+        local sq = C.live_squad(id)
+        if not sq or sq:section_name() ~= e.sec then
+            lost(id, e)
+        else
+            local target = target_of(e)
+            if e.phase == "go" then
+                if not target or t > e.deadline then
+                    if e.kind == "quest" and not target then
+                        resolve(sq, e)
+                    else
+                        e.ok, e.loot = false, {}
+                    end
+                    if e.hired then hired_report(e) end
+                    head_back(sq, e)
+                elseif arrived(sq, target) then
+                    local w = KINDS[e.kind].work
+                    e.phase, e.until_t = "work", t + C.rand(w[1], w[2]) * C.HOUR
+                    if e.comp then C.say(e.name, e.f, "zf_err_arrived", "news", C.smart_name(target)) end
+                elseif sq.assigned_target_id ~= e.target then
+                    C.send(sq, e.target, 72)
+                end
+            elseif e.phase == "work" then
+                if target and sq.assigned_target_id ~= e.target then C.send(sq, e.target, 72) end
+                scenes(sq, e)
+                if t >= e.until_t then
+                    resolve(sq, e)
+                    e.decide_by = e.decide_by or t + C.cfg("quest_live_h", 2) * C.HOUR
+                    if e.undecided and t < e.decide_by then
+                        e.until_t = t + 600
+                    else
+                        e.undecided = nil
+                        if e.hired then hired_report(e) end
+                        C.info("errand %s (%s%s) of %s squad %s: %s", e.kind, e.q or "-", e.hired and ", hired" or "",
+                            e.f, id, e.ok and "done" or e.part and "partly" or e.gone and "task gone" or "failed")
+                        sq = C.live_squad(id)
+                        if sq then head_back(sq, e) end
+                    end
+                end
+            elseif e.comp and e.deserted then
+                C.report("people", e.f, true, "zf_err_deserted", nil, "danger", e.name)
+                finish(id)
+            elseif e.comp then
+                if try_rejoin(sq, e) then
+                    finish(id)
+                elseif t - (e.ret_t or 0) > 1800 then
+                    head_back(sq, e)
+                end
+            else
+                robbery(sq, e)
+                local home = e.ret and alife_object(e.ret)
+                if not home or arrived(sq, home) or t > e.deadline then
+                    finish(id)
+                elseif sq.assigned_target_id ~= e.ret then
+                    C.send(sq, e.ret, 72)
+                end
+            end
+        end
+    end
+end
+function send_own(sq, kind)
+    local gp = C.gpos(sq)
+    local f = sq:get_squad_community()
+    local target, danger, extra
+    if gp then target, danger, extra = TARGET[kind](gp, C.cfg("err_radius", 1500), f) end
+    return target and begin(sq, kind, target, danger, extra, f, nil)
+end
+local function start_auto()
+    if not C.cfg("err_enabled", true) then return end
+    local n = 0
+    for _, e in pairs(errands()) do
+        if not e.comp then n = n + 1 end
+    end
+    if n >= C.cfg("err_auto_max", 6) or not C.ready("err_auto") then return end
+    C.cooldown("err_auto", C.cfg("err_auto_cooldown_h", 1.5) * C.rand(0.6, 1.4))
+    local kind = C.weighted({ hunt = 3, artifacts = 3, scout = 2 })
+    local f = C.weighted(AUTO[kind])
+    if not C.human(f) then return end
+    local cands = {}
+    for _, sq in ipairs(C.squads_of(f)) do
+        if sq:npc_count() <= 3 and not errands()[sq.id] and C.free(sq) then cands[#cands + 1] = sq end
+    end
+    local sq = cands[1] and cands[math.random(#cands)]
+    if sq then send_own(sq, kind) end
+end
+local function sendable(npc)
+    local sq = C.squad_of(npc:id())
+    if not (sq and axr_companions.companion_squads[sq.id]) then return end
+    local busy = 0
+    for _, e in pairs(errands()) do
+        if e.comp then busy = busy + 1 end
+    end
+    if busy >= C.cfg("err_comp_max", 3) then
+        C.say(C.name_of(sq:commander_id()), sq:get_squad_community(), "zf_err_too_many", "news")
+        return
+    end
+    return sq
+end
+local function dispatch(npc, sq, kind, target, danger, extra, owner)
+    utils_obj.execute_script_on_squad(npc, axr_companions.remove_from_actor_squad)
+    axr_companions.companion_squads[sq.id] = nil
+    local e = begin(sq, kind, target, danger, extra, warfare.actor_faction, owner)
+    if not e then
+        dialogs_axr_companion.become_actor_companion(db.actor, npc)
+        zf_coop.set_owner(sq.id, owner)
+        C.say(C.name_of(sq:commander_id()), sq:get_squad_community(), "zf_err_refused", "news")
+    end
+    return e
+end
+function send_companion(npc, kind, owner)
+    local sq = KINDS[kind] and kind ~= "quest" and sendable(npc)
+    if not sq then return false end
+    local f, name = sq:get_squad_community(), C.name_of(sq:commander_id())
+    local gp = C.gpos(sq)
+    local target, danger, extra
+    if gp then target, danger, extra = TARGET[kind](gp, C.cfg("err_radius", 1500), warfare.actor_faction) end
+    if not target then
+        C.say(name, f, "zf_err_no_target", "news")
+        return false
+    end
+    if not dispatch(npc, sq, kind, target, danger, extra, owner) then return false end
+    C.say(name, f, "zf_err_go_" .. kind, "news", C.smart_name(target))
+    return true
+end
+function send_companion_quest(npc, task_id, owner)
+    local sq = sendable(npc)
+    if not sq then return false end
+    local f, name = sq:get_squad_community(), C.name_of(sq:commander_id())
+    local tsk = task_of(task_id)
+    local q = tsk and (tsk.stage or 0) == 0 and QTYPE[tsk.status_functor or ""]
+    local gp = C.gpos(sq)
+    local target, danger, extra
+    if q and gp then target, danger, extra = quest_plan(task_id, q, warfare.actor_faction, gp) end
+    if not target then
+        C.say(name, f, "zf_err_no_quest", "news")
+        return false
+    end
+    extra.task, extra.q, extra.title, extra.str = task_id, q, title_of(tsk, task_id), quest_strength(sq, q)
+    if not dispatch(npc, sq, "quest", target, danger, extra, owner) then return false end
+    C.say(name, f, "zf_err_go_quest", "news", extra.title)
+    return true
+end
+function hire_refusal(npc, owner)
+    local sq = C.squad_of(npc:id())
+    if not sq or axr_companions.companion_squads[sq.id] or errands()[sq.id] then return "zf_hire_busy" end
+    if C.store("posted")[sq.id] then
+        if sq.stay_time or (sim_offline_combat.opponents and sim_offline_combat.opponents[sq.id])
+            or (warfare_squad_command and warfare_squad_command.is_controlled(sq.id)) then return "zf_hire_busy" end
+    elseif not C.free(sq) then
+        return "zf_hire_busy"
+    end
+    local n = 0
+    for _, e in pairs(errands()) do
+        if e.hired and e.owner == owner then n = n + 1 end
+    end
+    if n >= C.cfg("hire_max", 2) then return "zf_hire_too_many" end
+end
+function send_hired(npc, task_id, owner, price)
+    local why = hire_refusal(npc, owner)
+    if why then return false, why end
+    local sq = C.squad_of(npc:id())
+    local f = sq:get_squad_community()
+    local tsk = task_of(task_id)
+    local q = tsk and (tsk.stage or 0) == 0 and QTYPE[tsk.status_functor or ""]
+    local gp = C.gpos(sq)
+    local target, danger, extra
+    if q and gp then target, danger, extra = quest_plan(task_id, q, f, gp) end
+    if not target then return false, "zf_hire_no_quest" end
+    extra.task, extra.q, extra.title, extra.str, extra.paid = task_id, q, title_of(tsk, task_id), quest_strength(sq, q), price
+    zf_garrison.release(sq.id)
+    C.unshield(sq.id)
+    if not begin(sq, "quest", target, danger, extra, f, owner, true) then return false, "zf_hire_refused" end
+    C.say(C.name_of(npc:id()), f, "zf_hire_go", "news", extra.title)
+    C.info("hired: %s squad %s takes %s (%s) for %s, %s RU", f, sq.id, task_id, q, tostring(owner), tostring(price))
+    return true
+end
+local function is_peer()
+    return XrrIsHost ~= nil and not XrrIsHost()
+end
+local function cost(kind)
+    return kind == "supplies" and C.cfg("err_supply_cost", 2500) or 0
+end
+local function order(kind, a, b)
+    local npc = dialogs.who_is_npc(a, b)
+    local price = cost(kind)
+    if price > 0 then db.actor:give_money(-price) end
+    if is_peer() then
+        local host_id = xrr_pending_npc_lock_host_id and xrr_pending_npc_lock_host_id()
+        if host_id and host_id > 0 and host_id < 65535 then
+            XrrAlife():SendQuestAccept("__zf_errand_" .. kind, host_id)
+        elseif price > 0 then
+            db.actor:give_money(price)
+        end
+        return
+    end
+    if not send_companion(npc, kind, "host") and price > 0 then db.actor:give_money(price) end
+end
+function dlg_can_send(a, b)
+    if not C.cfg("err_enabled", true) then return false end
+    local npc = dialogs.who_is_npc(a, b)
+    return npc:has_info("npcx_is_companion") and not npc:has_info("npcx_beh_cannot_dismiss")
+end
+function dlg_can_pay()
+    return db.actor:money() >= cost("supplies")
+end
+function dlg_hunt(a, b) order("hunt", a, b) end
+function dlg_artifacts(a, b) order("artifacts", a, b) end
+function dlg_scout(a, b) order("scout", a, b) end
+function dlg_supplies(a, b) order("supplies", a, b) end
+function dlg_raid(a, b) order("raid", a, b) end
+local function slot(i)
+    return doable_tasks()[i]
+end
+local function quest_order(i, a, b)
+    local s = slot(i)
+    if not s then return end
+    local npc = dialogs.who_is_npc(a, b)
+    if is_peer() then
+        local host_id = xrr_pending_npc_lock_host_id and xrr_pending_npc_lock_host_id()
+        if host_id and host_id > 0 and host_id < 65535 then
+            XrrAlife():SendQuestAccept("__zf_quest|" .. s.id, host_id)
+        end
+        return
+    end
+    send_companion_quest(npc, s.id, "host")
+end
+function estimate(npc, task_id)
+    local sq = not is_peer() and C.squad_of(npc:id())
+    local tsk = sq and task_of(task_id)
+    local q = tsk and QTYPE[tsk.status_functor or ""]
+    local gp = q and C.gpos(sq)
+    local target, danger
+    if gp then target, danger = quest_plan(task_id, q, warfare.actor_faction, gp) end
+    if not target then return end
+    local p = chance(quest_strength(sq, q), danger)
+    return p, p >= 0.6 and "good" or p >= 0.35 and "fair" or "poor"
+end
+local function quest_text(i, a, b)
+    local s = slot(i)
+    if not s then return "" end
+    local text = string.format(game.translate_string("zf_dlg_quest_slot"), s.title)
+    local p, label
+    if a and b then p, label = estimate(dialogs.who_is_npc(a, b), s.id) end
+    return label and (text .. " " .. game.translate_string("zf_odds_" .. label)) or text
+end
+function quest_any(a, b) return dlg_can_send(a, b) and slot(1) ~= nil end
+function quest_has_1() return slot(1) ~= nil end
+function quest_has_2() return slot(2) ~= nil end
+function quest_has_3() return slot(3) ~= nil end
+function quest_has_4() return slot(4) ~= nil end
+function quest_has_5() return slot(5) ~= nil end
+function quest_text_1(a, b) return quest_text(1, a, b) end
+function quest_text_2(a, b) return quest_text(2, a, b) end
+function quest_text_3(a, b) return quest_text(3, a, b) end
+function quest_text_4(a, b) return quest_text(4, a, b) end
+function quest_text_5(a, b) return quest_text(5, a, b) end
+function quest_do_1(a, b) quest_order(1, a, b) end
+function quest_do_2(a, b) quest_order(2, a, b) end
+function quest_do_3(a, b) quest_order(3, a, b) end
+function quest_do_4(a, b) quest_order(4, a, b) end
+function quest_do_5(a, b) quest_order(5, a, b) end
+local function hook_dialog()
+    local d = dialogs_axr_companion
+    if not (d and d.dm_init_is_actor_companion and d.add_dialog) or d.__zf_hooked then return end
+    d.__zf_hooked = true
+    local orig = d.dm_init_is_actor_companion
+    d.dm_init_is_actor_companion = function(dialog)
+        orig(dialog)
+        local add = d.add_dialog
+        add(1, 7000, "zf_dlg_errand", "zf_errands.dlg_can_send")
+        add(7000, 7001, "zf_dlg_errand_what")
+        add(7001, 7010, "zf_dlg_errand_hunt", nil, "zf_errands.dlg_hunt")
+        add(7010, 7011, "zf_dlg_errand_ok")
+        add(7001, 7020, "zf_dlg_errand_artifacts", nil, "zf_errands.dlg_artifacts")
+        add(7020, 7021, "zf_dlg_errand_ok")
+        add(7001, 7030, "zf_dlg_errand_scout", nil, "zf_errands.dlg_scout")
+        add(7030, 7031, "zf_dlg_errand_ok")
+        add(7001, 7040, "zf_dlg_errand_supplies", "zf_errands.dlg_can_pay", "zf_errands.dlg_supplies")
+        add(7040, 7041, "zf_dlg_errand_ok")
+        add(7001, 7050, "zf_dlg_errand_raid", nil, "zf_errands.dlg_raid")
+        add(7050, 7051, "zf_dlg_errand_ok")
+        add(7001, 7090, "zf_dlg_errand_never")
+        add(1, 7100, "zf_dlg_quest", "zf_errands.quest_any")
+        add(7100, 7101, "zf_dlg_quest_which")
+        for i = 1, 5 do
+            local s = add(7101, 7110 + i, "zf_dlg_quest_slot", "zf_errands.quest_has_" .. i, "zf_errands.quest_do_" .. i)
+            if s then s:SetScriptText("zf_errands.quest_text_" .. i) end
+            add(7110 + i, 7130 + i, "zf_dlg_errand_ok")
+        end
+        add(7101, 7190, "zf_dlg_errand_never")
+    end
+end
+local function hook_peer_orders()
+    for kind in pairs(KINDS) do
+        if kind ~= "quest" then
+            C.on_peer_key("__zf_errand_" .. kind, function(npc, owner)
+                if not (npc and send_companion(npc, kind, owner)) and cost(kind) > 0 then
+                    local p = C.player_by_key(owner)
+                    if p then C.reward(p, cost(kind), "zf_news_refund") end
+                end
+            end)
+        end
+    end
+    C.on_peer_order("__zf_quest", function(task_id, npc, owner)
+        if npc then send_companion_quest(npc, task_id, owner) end
+    end)
+end
+function on_game_start()
+    hook_dialog()
+    hook_peer_orders()
+    C.every("zf_errands", 10, step)
+    C.every("zf_errands_auto", 120, start_auto)
+end

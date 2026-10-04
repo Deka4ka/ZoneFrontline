@@ -1,0 +1,14 @@
+<w>
+	<!-- Section header in a 36-high option row: text-less button for the click, static for the label. -->
+	<sec_btn x="10" y="5" width="563" height="30">
+		<text font="letterica16" align="c" vert_align="c"/>
+	</sec_btn>
+	<sec_cap x="10" y="5" width="563" height="30">
+		<text font="letterica16" align="c" vert_align="c"/>
+	</sec_cap>
+
+	<!-- Rule on each side of the title, same art as elements:line. x and width set from Lua. -->
+	<sec_rule x="0" y="12" width="563" height="16" stretch="1">
+		<texture>ui_inGame2_opt_slider_bar_back</texture>
+	</sec_rule>
+</w>

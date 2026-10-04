@@ -1,0 +1,397 @@
+local C = zf_core
+local E = zf_encounters
+local ROBBERS = { bandit = true, renegade = true }
+local GOODS = { "bandage", "medkit", "conserva", "bread", "kolbasa", "vodka", "energy_drink", "antirad",
+    "ammo_9x18_fmj", "ammo_5.45x39_fmj", "ammo_12x70_buck" }
+local LOOT = { "af_medusa", "af_vyvert", "af_blood", "af_night_star", "af_gravi", "af_cristall_flower" }
+local met = {}
+local function on()
+    return C.cfg("life_enabled", true)
+end
+local function existing(list)
+    local out = {}
+    for _, s in ipairs(list) do
+        if ini_sys:section_exist(s) then out[#out + 1] = s end
+    end
+    return out
+end
+local function online_squads()
+    local seen, list = {}, {}
+    for _, id in pairs(db.OnlineStalkers) do
+        local sq = C.squad_of(id)
+        if sq and not seen[sq.id] then
+            seen[sq.id] = true
+            list[#list + 1] = sq
+        end
+    end
+    return list
+end
+local function leader(sq)
+    local l = level.object_by_id(sq:commander_id())
+    return l and l:alive() and l or nil
+end
+local function power(sq)
+    local s = 0
+    for _, m in ipairs(C.members_online(sq)) do s = s + C.rank_level(m) end
+    return s
+end
+local function free_to_meet(sq)
+    if axr_companions.companion_squads[sq.id] or C.store("errands")[sq.id] then return false end
+    for _, m in ipairs(C.members_online(sq)) do
+        if m:best_enemy() or zf_captive.is_captive(m:id()) then return false end
+    end
+    return true
+end
+local function goods_of(npc)
+    for _, sec in ipairs(existing(GOODS)) do
+        if npc:object(sec) then return sec end
+    end
+end
+local function hand_over(from, to, sec)
+    local item = sec and from:object(sec)
+    if not item then return end
+    alife_release_id(item:id())
+    C.give(to, sec, 1)
+    return sec
+end
+local function start_feud(a, b, key)
+    C.feud(a.sq.id, b.sq.id, 1)
+    C.log("meeting %s: %s and %s quarrel, shooting", key, a.f, b.f)
+    C.note("life", { a.f, b.f }, C.text("zf_j_feud", nil, C.faction_name(a.f), C.faction_name(b.f)))
+end
+local function meet(a, b, key)
+    if C.act(a.l, "remark@zf_chat", 15) then C.face(a.l, "talk_default", b.l) end
+    if C.act(b.l, "remark@zf_chat", 15) then C.face(b.l, "talk_default", a.l) end
+    local robber = (ROBBERS[a.f] and not ROBBERS[b.f] and a) or (ROBBERS[b.f] and not ROBBERS[a.f] and b) or nil
+    if robber then
+        local victim = robber == a and b or a
+        if power(robber.sq) >= power(victim.sq) * 0.8 and math.random() < 0.7 then
+            if math.random() < 0.6 then
+                local paid = hand_over(victim.l, robber.l, goods_of(victim.l))
+                C.log("meeting %s: %s shake down %s (%s)", key, robber.f, victim.f, paid)
+                C.note("life", { robber.f, victim.f }, C.text("zf_j_toll", nil, C.faction_name(robber.f), C.faction_name(victim.f)))
+            else
+                start_feud(a, b, key)
+            end
+            return
+        end
+    end
+    local friends, roll = C.friends(a.f, b.f), math.random()
+    if (friends and roll < 0.7) or (not friends and roll < 0.25) then
+        local x, y = goods_of(a.l), goods_of(b.l)
+        hand_over(a.l, b.l, x)
+        hand_over(b.l, a.l, y)
+        C.log("meeting %s: %s and %s trade (%s for %s)", key, a.f, b.f, x, y)
+        C.note("life", { a.f, b.f }, C.text("zf_j_meet_trade", nil, C.faction_name(a.f), C.faction_name(b.f)))
+    elseif not friends and roll > 0.8 then
+        start_feud(a, b, key)
+    else
+        C.log("meeting %s: %s and %s talk and part ways", key, a.f, b.f)
+    end
+end
+local function meetings()
+    if not on() then return end
+    local t = time_global()
+    local cand = {}
+    for _, sq in ipairs(online_squads()) do
+        local f = sq:get_squad_community()
+        local l = C.human(f) and leader(sq)
+        if l and C.can_act(l) and free_to_meet(sq) then
+            local _, d = C.nearest_player(l:position(), C.player_level(l))
+            if d and d < 150 then cand[#cand + 1] = { sq = sq, l = l, f = f } end
+        end
+    end
+    local r = C.cfg("meet_radius", 25)
+    for i = 1, #cand do
+        for j = i + 1, #cand do
+            local a, b = cand[i], cand[j]
+            local key = math.min(a.sq.id, b.sq.id) .. "|" .. math.max(a.sq.id, b.sq.id)
+            if a.f ~= b.f and not C.enemies(a.f, b.f) and (met[key] or 0) <= t
+                and a.l:position():distance_to(b.l:position()) <= r then
+                met[key] = t + C.cfg("meet_cooldown_min", 30) * 60000
+                meet(a, b, key)
+                return
+            end
+        end
+    end
+end
+local function chases()
+    return C.store("chases")
+end
+function chase(chaser, target, hours)
+    if not C.send(chaser, target.id, hours) then return false end
+    chases()[chaser.id] = { target = target.id, until_t = C.now() + hours * C.HOUR }
+    return true
+end
+function pursue(fleeing, f, hours)
+    if not (on() and fleeing and C.human(f)) or math.random() > C.cfg("chase_chance", 0.5) then return false end
+    local gp = C.gpos(fleeing)
+    for _, sq in ipairs(gp and C.nearest_free(f, gp, C.cfg("chase_radius", 500), 2) or {}) do
+        if sq.id ~= fleeing.id and chase(sq, fleeing, hours or 1) then
+            C.log("chase: %s squad %s after squad %s", f, sq.id, fleeing.id)
+            return true
+        end
+    end
+    return false
+end
+local function keep_chasing()
+    local t = C.now()
+    for id, c in pairs(chases()) do
+        local sq, target = C.live_squad(id), C.live_squad(c.target)
+        if not (sq and target) or t > c.until_t then
+            chases()[id] = nil
+            C.store("busy")[id] = nil
+            if sq and sq.assigned_target_id == c.target then C.send_home(sq, 1) end
+        elseif sq.assigned_target_id ~= c.target then
+            C.send(sq, c.target, (c.until_t - t) / C.HOUR)
+        end
+    end
+end
+local function thief()
+    if not on() or not C.ready("thief") or C.crowded() then return end
+    C.cooldown("thief", 0.25)
+    if math.random() > C.cfg("thief_chance", 0.2) then return end
+    local ctx = E.context()
+    if not ctx then return end
+    local function robbers_of(v) return E.factions(function(f) return ROBBERS[f] and C.enemies(f, v) end) end
+    local victim = E.pick(E.factions(function(f)
+        return not ROBBERS[f] and not C.enemies(f, ctx.af) and #robbers_of(f) > 0
+    end))
+    local tf = victim and E.pick(robbers_of(victim))
+    local from = tf and E.far(ctx)
+    local to = from and E.across(ctx, from)
+    if not (to and to.id ~= from.id) then return end
+    local out = {}
+    local th = E.squad(out, E.squad_section(tf, "novice"), from, to)
+    if not th then return end
+    local extra = {}
+    for m in th:squad_members() do
+        if m.id ~= th:commander_id() then extra[#extra + 1] = m.id end
+    end
+    for _, id in ipairs(extra) do th:remove_npc(id, true) end
+    local loot = existing(LOOT)
+    local se = alife_object(th:commander_id())
+    if se and #loot > 0 then alife_create_item(loot[math.random(#loot)], se) end
+    C.unshield(th.id)
+    C.feud(th.id, "all", 3)
+    E.track("thief", { th }, 3)
+    local chasers = {}
+    local ch = E.squad(chasers, E.squad_section(victim, "advanced"), from, from)
+    if ch then
+        chase(ch, th, 3)
+        C.feud(ch.id, th.id, 3)
+        E.track("thief_chase", chasers, 3)
+    end
+    C.cooldown("thief", C.cfg("thief_cooldown_h", 6))
+    C.report("life", { victim, tf }, true, "zf_life_thief", victim, "news", C.smart_name(to), C.faction_name(tf))
+    C.log("thief (%s) runs from %s to %s, %s after him", tf, from:name(), to:name(), victim)
+end
+local function hunts()
+    return C.store("hunts")
+end
+local function nearest_smart(p)
+    local pos, best, bd = p:position(), nil, nil
+    for _, sm in ipairs(C.smarts_on_level(C.player_level(p))) do
+        local d = sm.position:distance_to(pos)
+        if not bd or d < bd then best, bd = sm, d end
+    end
+    return best
+end
+local function send_hunters(f, p, h)
+    if C.crowded() then return end
+    local pos, from = p:position(), {}
+    for _, sm in ipairs(C.smarts_on_level(C.player_level(p))) do
+        local d = sm.position:distance_to(pos)
+        if d >= 300 and d <= 700 then from[#from + 1] = sm end
+    end
+    local at = from[1] and from[math.random(#from)]
+    local out = {}
+    local sq = at and E.squad(out, E.squad_section(f, "veteran"), at, at)
+    if not sq then return end
+    E.track("hunters", out, 4)
+    h.squads[#h.squads + 1] = sq.id
+    h.murder, h.started, h.until_t = true, true, C.now() + 3 * C.HOUR
+    C.report("life", f, true, "zf_life_hunters", f, "danger", C.faction_name(f))
+    C.log("hunters of %s after a player", f)
+end
+local function on_npc_death(sq, se_npc, killer)
+    if not (on() and sq and killer and C.is_player_id(killer.id)) then return end
+    local f = sq:get_squad_community()
+    local body, p = level.object_by_id(se_npc.id), level.object_by_id(killer.id)
+    if not (C.human(f) and body and p) then return end
+    local pk, pos = C.player_key(p), body:position()
+    local h = hunts()[pk]
+    if not h or h.f ~= f then h = { f = f, squads = {} } end
+    local seen = {}
+    for _, id in ipairs(h.squads) do seen[id] = true end
+    if not seen[sq.id] and sq:npc_count() > 1 then
+        h.squads[#h.squads + 1], seen[sq.id] = sq.id, true
+    end
+    for _, osq in ipairs(online_squads()) do
+        local l = not seen[osq.id] and osq:get_squad_community() == f and leader(osq)
+        if l and l:position():distance_to(pos) < 150 then
+            h.squads[#h.squads + 1], seen[osq.id] = osq.id, true
+        end
+    end
+    h.x, h.y, h.z, h.lid = pos.x, pos.y, pos.z, C.player_level(p)
+    h.murder = h.murder or not C.enemies(f, C.community(p))
+    h.until_t = math.max(h.until_t or 0, C.now() + C.cfg("chase_time_min", 30) * 60)
+    hunts()[pk] = h
+    if zf_classes.commander_of(sq) == se_npc.id and C.ready("hunters_" .. f)
+        and math.random() < C.cfg("hunters_chance", 0.25) then
+        C.cooldown("hunters_" .. f, C.cfg("hunters_cooldown_h", 12))
+        send_hunters(f, p, h)
+    end
+end
+local function drop_vendetta(p, squads)
+    for _, s in ipairs(squads) do
+        for _, m in ipairs(C.members_online(s)) do C.forgive(m, p) end
+    end
+end
+local function keep_hunting()
+    local t = C.now()
+    for pk, h in pairs(hunts()) do
+        local p = C.player_by_key(pk)
+        local alive = {}
+        for _, id in ipairs(h.squads) do
+            local s = C.live_squad(id)
+            if s and not axr_companions.companion_squads[id] then alive[#alive + 1] = s end
+        end
+        local over = not p or t > h.until_t or #alive == 0 or C.player_level(p) ~= h.lid
+        local escaped = false
+        if not over then
+            local nearest
+            for _, s in ipairs(alive) do
+                local d = s.position:distance_to(p:position())
+                if not nearest or d < nearest then nearest = d end
+            end
+            escaped = h.started and nearest > C.cfg("chase_lost_dist", 500)
+            over = escaped
+            local fled = p:position():distance_to(vector():set(h.x, h.y, h.z)) > C.cfg("chase_flee_dist", 80)
+            if not over and (h.started or fled) then
+                if not h.started then
+                    h.started = true
+                    C.report("life", h.f, true, "zf_life_chase_you", h.f, "danger", C.faction_name(h.f))
+                end
+                local spot = nearest_smart(p)
+                for _, s in ipairs(alive) do
+                    if spot and s.assigned_target_id ~= spot.id then C.send(s, spot.id, 1) end
+                    if h.murder then
+                        for _, m in ipairs(C.members_online(s)) do C.hostile(m, p) end
+                    end
+                end
+            end
+        end
+        if over then
+            if escaped then C.report("life", h.f, true, "zf_life_chase_lost", nil, "news") end
+            if p and h.murder then drop_vendetta(p, alive) end
+            hunts()[pk] = nil
+        end
+    end
+end
+local function robbers_for(gp, f, must_hate)
+    local best, bd
+    for rf in pairs(ROBBERS) do
+        if rf ~= f and not C.friends(rf, f) and (not must_hate or C.enemies(rf, f)) then
+            local sq = C.nearest_free(rf, gp, C.cfg("rob_radius", 300), 1)[1]
+            local d = sq and C.d2(C.gpos(sq), gp)
+            if d and (not bd or d < bd) then best, bd = sq, d end
+        end
+    end
+    return best
+end
+local function lifted_by_player(p)
+    if not (on() and p and p:alive()) then return end
+    local pk = C.player_key(p)
+    if hunts()[pk] or not C.ready("rob_" .. pk) or math.random() > C.cfg("rob_chance", 0.35) then return end
+    local lid, pos = C.player_level(p), p:position()
+    local sq = robbers_for(global_position.from(pos, lid), C.community(p))
+    if not sq then return end
+    C.cooldown("rob_" .. pk, C.cfg("rob_cooldown_h", 2))
+    local f = sq:get_squad_community()
+    hunts()[pk] = { f = f, squads = { sq.id }, x = pos.x, y = pos.y, z = pos.z, lid = lid, murder = true,
+        started = true, until_t = C.now() + C.cfg("chase_time_min", 30) * 60 }
+    C.report("life", f, true, "zf_life_robbers", f, "danger", C.faction_name(f))
+    C.log("robbers: %s squad %s after player %s (artefact)", f, sq.id, pk)
+end
+local function lifted_by_npc(npc, item)
+    if not (on() and item and IsArtefact(item)) then return end
+    local sq = C.squad_of(npc:id())
+    local f = sq and sq:get_squad_community()
+    if not (f and C.human(f)) or ROBBERS[f] or not C.free(sq) or C.store("errands")[sq.id] then return end
+    for _, c in pairs(chases()) do
+        if c.target == sq.id then return end
+    end
+    if math.random() > C.cfg("rob_chance", 0.35) then return end
+    local gp = C.gpos(sq)
+    local rsq = gp and robbers_for(gp, f, true)
+    if not (rsq and chase(rsq, sq, 1)) then return end
+    C.feud(rsq.id, sq.id, 1)
+    local rf = rsq:get_squad_community()
+    C.log("robbers: %s squad %s after %s squad %s (artefact)", rf, rsq.id, f, sq.id)
+    local _, d = C.nearest_player(npc:position(), C.player_level(npc))
+    C.report("life", { rf, f }, d ~= nil and d < 300, "zf_life_robbers_npc", nil, "news", C.faction_name(rf), C.faction_name(f))
+end
+local function couriers()
+    return C.store("couriers")
+end
+local function courier()
+    if not on() or not C.ready("courier") or C.crowded() then return end
+    C.cooldown("courier", 0.5)
+    for id in pairs(couriers()) do
+        if not C.live_squad(id) then couriers()[id] = nil end
+    end
+    if math.random() > C.cfg("courier_chance", 0.25) then return end
+    local ps = C.players()
+    local p = ps[1] and ps[math.random(#ps)]
+    if not p then return end
+    local gp = global_position.from(p:position(), C.player_level(p))
+    local a, ad
+    for _, sm in ipairs(C.smarts()) do
+        local q = C.is_base(sm) and C.human(sm.owning_faction) and C.smart_gpos(sm)
+        local d = q and C.d2(q, gp)
+        if d and d <= 1500 * 1500 and (not ad or d < ad) then a, ad = sm, d end
+    end
+    local f = a and a.owning_faction
+    local bs = {}
+    for _, sm in ipairs(C.smarts()) do
+        if f and sm.id ~= a.id and C.is_base(sm) and sm.owning_faction == f then bs[#bs + 1] = sm end
+    end
+    local b = bs[1] and bs[math.random(#bs)]
+    if not b then return end
+    local out = {}
+    local sq = E.squad(out, E.squad_section(f, "advanced"), a, b)
+    if not sq then return end
+    E.track("courier", out, 8)
+    couriers()[sq.id] = f
+    C.cooldown("courier", C.cfg("courier_cooldown_h", 4))
+    C.report("life", f, math.random() < 0.5, "zf_life_courier", nil, "news", C.faction_name(f), C.smart_name(b))
+    C.log("courier of %s: %s -> %s", f, a:name(), b:name())
+end
+local function on_courier_death(sq, se_npc)
+    local f = sq and couriers()[sq.id]
+    if f and level.object_by_id(se_npc.id) then
+        C.store("intel")[se_npc.id] = { f = f, until_t = C.now() + 2 * C.HOUR }
+    end
+end
+function on_game_start()
+    RegisterScriptCallback("squad_on_npc_death", C.guard("zf_life.death", function(sq, se_npc, killer)
+        on_courier_death(sq, se_npc)
+        on_npc_death(sq, se_npc, killer)
+    end))
+    RegisterScriptCallback("actor_on_item_before_pickup", C.guard("zf_life.rob", function(item)
+        if item and IsArtefact(item) then lifted_by_player(db.actor) end
+    end))
+    RegisterScriptCallback("npc_on_item_take", C.guard("zf_life.rob_npc", lifted_by_npc))
+    if xrr_net_server then
+        RegisterScriptCallback("xrr_on_peer_item_take", C.guard("zf_life.rob_peer", function(avatar_id, item_id)
+            local item = level.object_by_id(item_id)
+            if item and IsArtefact(item) then lifted_by_player(level.object_by_id(avatar_id)) end
+        end))
+    end
+    C.every("zf_life_meet", 15, meetings)
+    C.every("zf_life_chase", 20, keep_chasing)
+    C.every("zf_life_hunt", 10, keep_hunting)
+    C.every("zf_life_thief", 60, thief)
+    C.every("zf_life_courier", 120, courier)
+end

@@ -1,0 +1,469 @@
+<?xml version="1.0" encoding="windows-1251"?>
+
+<!-- 
+	WARFARE STRINGS
+-->
+
+<string_table>
+	<string id="st_wrfr_opt_presets">
+		<text>Presets</text>
+	</string>
+	<!-- Caption above the preset combo on warfare pages; see modxml_warfare_presets. -->
+	<string id="ui_warfare_preset">
+		<text>Preset</text>
+	</string>
+	<string id="st_wrfr_opt_apply_to_all">
+		<text>Apply to All</text>
+	</string>
+	<string id="st_wrfr_opt_general">
+		<text>General</text>
+	</string>
+	<string id="st_wrfr_opt_azazel_respawn">
+		<text>Azazel Respawn</text>
+	</string>
+	<string id="st_wrfr_opt_rand_settings">
+		<text>Randomize settings</text>
+	</string>
+	
+	<string id="st_wrfr_influnence_points">
+		<text>Influence Points</text>
+	</string>
+	<string id="st_wrfr_release_control_faction">
+		<text>Release control of faction</text>
+	</string>
+	<string id="st_wrfr_take_control_faction">
+		<text>Take control of faction</text>
+	</string>
+	<string id="st_wrfr_show_points">
+		<text>Show Points / Smart Terrain</text>
+	</string>
+	<string id="st_wrfr_hide_points">
+		<text>Hide Points / Smart Terrain</text>
+	</string>
+	<string id="st_wrfr_display_faction_info">
+		<text>Display faction information</text>
+	</string>
+	<string id="st_wrfr_unselect_squad">
+		<text>Unselect Squad</text>
+	</string>
+	<string id="st_wrfr_select_squad">
+		<text>Select Squad</text>
+	</string>
+	<string id="st_wrfr_unselect_point">
+		<text>Unselect Point</text>
+	</string>
+	<string id="st_wrfr_select_point">
+		<text>Select Point</text>
+	</string>
+	<string id="st_wrfr_select_obj">
+		<text>Selected Object</text>
+	</string>
+	<string id="st_wrfr_add_influ">
+		<text>Add Influence</text>
+	</string>
+	<string id="st_wrfr_remove_influ">
+		<text>Remove Influence</text>
+	</string>
+	
+	<string id="st_wrfr_cap_point">
+		<text>Capture Point</text>
+	</string>
+	<string id="st_wrfr_buy_novice_squad">
+		<text>Buy novice squad</text>
+	</string>
+	<string id="st_wrfr_buy_adv_squad">
+		<text>Buy advanced squad</text>
+	</string>
+	<string id="st_wrfr_buy_veteran_squad">
+		<text>Buy veteran squad</text>
+	</string>
+	<string id="st_wrfr_buy_heli">
+		<text>Buy helicopter</text>
+	</string>
+	<string id="st_wrfr_declare_war">
+		<text>Declare war</text>
+	</string>
+	<string id="st_wrfr_possess_leader">
+		<text>Possess Squad Leader</text>
+	</string>
+	<string id="st_wrfr_follow">
+		<text>Follow</text>
+	</string>
+	<string id="st_wrfr_attack">
+		<text>Attack</text>
+	</string>
+	<string id="st_wrfr_target">
+		<text>Target</text>
+	</string>
+	<string id="st_wrfr_move_here">
+		<text>Move Here</text>
+	</string>
+	<string id="st_wrfr_send_squad">
+		<text>Send Squad</text>
+	</string>
+	<string id="st_wrfr_send_all_squad">
+		<text>Send All Squads</text>
+	</string>
+	<string id="st_wrfr_take_squad">
+		<text>Take Squad</text>
+	</string>
+	<string id="st_wrfr_take_all_squads">
+		<text>Take All Squads</text>
+	</string>
+	<string id="st_wrfr_attack_with_all">
+		<text>Attack with All</text>
+	</string>
+	<string id="st_wrfr_send_heli_to_point">
+		<text>Send helicopter to point</text>
+	</string>
+	<string id="st_wrfr_send_heli_to_squad">
+		<text>Send helicopter to squad</text>
+	</string>
+	<string id="st_wrfr_remove_heli">
+		<text>Remove helicopter</text>
+	</string>
+	<string id="st_wrfr_heli_route">
+		<text>Helicopter en route</text>
+	</string>
+	<string id="st_wrfr_order_1">
+		<text>Sending %s to %s</text>
+	</string>
+	<string id="st_wrfr_order_2">
+		<text>Sending %s to attack %s</text>
+	</string>
+	<string id="st_wrfr_order_3">
+		<text>%s is now following %s</text>
+	</string>
+	<string id="st_wrfr_order_4">
+		<text>Sending one defense squad from %s's squad follow the player.</text>
+	</string>
+	<string id="st_wrfr_order_5">
+		<text>Sending all defense squads from %s's squad follow the player.</text>
+	</string>
+	<string id="st_wrfr_order_6">
+		<text>Sending one defense squad from %s's squad to attack %s's squad.</text>
+	</string>
+	<string id="st_wrfr_order_7">
+		<text>Sending all defense squads from %s's squad to attack %s's squad.</text>
+	</string>
+	<string id="st_wrfr_order_8">
+		<text>Sending one defense squad from %s's squad to follow %s's squad.</text>
+	</string>
+	<string id="st_wrfr_order_9">
+		<text>Sending all defense squads from %s's squad to follow %s's squad.</text>
+	</string>
+	<string id="st_wrfr_order_10">
+		<text>Adding %s to %s's targets</text>
+	</string>
+	<string id="st_wrfr_order_11">
+		<text>Sending one squad from %s to attack %s.</text>
+	</string>
+	<string id="st_wrfr_order_12">
+		<text>Sending all squads from %s to attack %s.</text>
+	</string>
+	<string id="st_wrfr_order_13">
+		<text>Moving one squad from %s to attack %s.</text>
+	</string>
+	<string id="st_wrfr_order_14">
+		<text>Moving all squads from %s to attack %s.</text>
+	</string>
+	<string id="st_wrfr_order_15">
+		<text>Sending one squad from %s to %s.</text>
+	</string>
+	<string id="st_wrfr_order_16">
+		<text>Sending all squads from %s to %s.</text>
+	</string>
+	<string id="st_wrfr_order_17">
+		<text>Sending helicopter to %s.</text>
+	</string>
+	<string id="st_wrfr_heli_removed">
+		<text>Helicopter removed</text>
+	</string>
+	<string id="st_wrfr_heli_already_spawned">
+		<text>Helicopter already spawned on level!</text>
+	</string>
+	
+	<string id="st_wrfr_smrt_auto_capture">
+		<text>Auto capturing %s!</text>
+	</string>
+	<string id="st_wrfr_prop_base">
+		<text>Base</text>
+	</string>
+	<string id="st_wrfr_prop_resource">
+		<text>Resource</text>
+	</string>
+	<string id="st_wrfr_prop_territory">
+		<text>Territory</text>
+	</string>
+	<string id="st_wrfr_prop_lair">
+		<text>Lair</text>
+	</string>
+	<string id="st_wrfr_prop_faction">
+		<text>Faction</text>
+	</string>
+	<string id="st_wrfr_prop_curr_popu">
+		<text>Current Population</text>
+	</string>
+	<string id="st_wrfr_prop_max_popu">
+		<text>Max Population</text>
+	</string>
+	<string id="st_wrfr_prop_resource_count">
+		<text>Resource count</text>
+	</string>
+	<string id="st_wrfr_prop_time_capture">
+		<text>Time until captured</text>
+	</string>
+	<string id="st_wrfr_prop_next_defense">
+		<text>New squad in</text>
+	</string>
+	<string id="st_wrfr_prop_next_patrol">
+		<text>New patrol in</text>
+	</string>
+	<string id="st_wrfr_prop_time_culc_hr">
+		<text>%sh + %smin</text>
+	</string>
+	<string id="st_wrfr_prop_time_culc_min">
+		<text>%smin</text>
+	</string>
+	<string id="st_wrfr_prop_target">
+		<text>Target</text>
+	</string>
+	<string id="st_wrfr_prop_invasion_size">
+		<text>Invasion Size</text>
+	</string>
+	<string id="st_wrfr_prop_targets">
+		<text>--Targets--</text>
+	</string>
+	<string id="st_wrfr_prop_invasion">
+		<text>--Invasion--</text>
+	</string>
+	<string id="st_wrfr_smart_count_warning">
+		<text>Smart (%s) has %s squads!</text>
+	</string>
+	<string id="st_wrfr_prop_supporting_invasion">
+		<text>--Supporting Invasion--</text>
+	</string>
+	<string id="st_wrfr_prop_launch_base">
+		<text>Launch Base</text>
+	</string>
+	<string id="st_wrfr_prop_departure">
+		<text>Departure</text>
+	</string>
+	<string id="st_wrfr_prop_patrol_at_cap">
+		<text>at cap</text>
+	</string>
+	
+	<string id="st_wrfr_heli">
+		<text>Helicopter</text>
+	</string>
+	<string id="st_wrfr_you">
+		<text>you</text>
+	</string>
+	<string id="st_wrfr_mutant">
+		<text>mutant</text>
+	</string>
+	<string id="st_wrfr_none">
+		<text>none</text>
+	</string>
+	
+	<string id="st_wrfr_sim_1">
+		<text>%s's Squad</text>
+	</string>
+	<string id="st_wrfr_sim_2">
+		<text>Member(s)</text>
+	</string>
+	<string id="st_wrfr_sim_3">
+		<text>Section</text>
+	</string>
+	<string id="st_wrfr_sim_4">
+		<text>ID</text>
+	</string>
+	<string id="st_wrfr_sim_5">
+		<text>In combat</text>
+	</string>
+	<string id="st_wrfr_sim_6">
+		<text>On Way to Target</text>
+	</string>
+	<string id="st_wrfr_sim_7">
+		<text>Waiting at Target</text>
+	</string>
+	<string id="st_wrfr_sim_8">
+		<text>Total Power</text>
+	</string>
+	<string id="st_wrfr_sim_9">
+		<text>Power</text>
+	</string>
+	<string id="st_wrfr_sim_10">
+		<text>Owning base</text>
+	</string>
+	<string id="st_wrfr_sim_11">
+		<text>Idle time</text>
+	</string>
+	<string id="st_wrfr_sim_12">
+		<text>Target level</text>
+	</string>
+	<string id="st_wrfr_ap_unknown">
+		<text>Unknown activity</text>
+	</string>
+    <string id="st_wrfr_pda_tab">
+        <text>Warfare</text>
+    </string>
+
+	<!-- Player command system (multi-select, control, detachments) -->
+	<string id="st_wrfr_cmd_select">
+		<text>Select</text>
+	</string>
+	<string id="st_wrfr_cmd_deselect">
+		<text>Deselect</text>
+	</string>
+	<string id="st_wrfr_cmd_take">
+		<text>Take Control</text>
+	</string>
+	<string id="st_wrfr_cmd_release">
+		<text>Release Control</text>
+	</string>
+	<string id="st_wrfr_cmd_form">
+		<text>Form Detachment</text>
+	</string>
+	<string id="st_wrfr_cmd_formed">
+		<text>Detachment %s formed.</text>
+	</string>
+	<string id="st_wrfr_cmd_command_det">
+		<text>Command Detachment: %s</text>
+	</string>
+	<string id="st_wrfr_cmd_add_det">
+		<text>Add to: %s</text>
+	</string>
+	<string id="st_wrfr_cmd_follow_grp">
+		<text>Follow by</text>
+	</string>
+	<string id="st_wrfr_cmd_attack_grp">
+		<text>Attack</text>
+	</string>
+	<string id="st_wrfr_cmd_send_grp">
+		<text>Send here</text>
+	</string>
+	<string id="st_wrfr_cmd_sel_leaf">
+		<text>Selected</text>
+	</string>
+	<string id="st_wrfr_cmd_attack_all">
+		<text>Attack (all forces)</text>
+	</string>
+	<string id="st_wrfr_cmd_move_all">
+		<text>Move Here (all forces)</text>
+	</string>
+	<string id="st_wrfr_cmd_follow_all">
+		<text>Follow (all forces)</text>
+	</string>
+	<string id="st_wrfr_cmd_notify_quota">
+		<text>Command capacity reached (%s/%s).</text>
+	</string>
+	<string id="st_wrfr_cmd_notify_rank">
+		<text>That squad will not take orders from a %s.</text>
+	</string>
+	<string id="st_wrfr_cmd_notify_elite">
+		<text>Only %s of your squads may be this close to your own rank.</text>
+	</string>
+	<string id="st_wrfr_cmd_ordered">
+		<text>Ordered %s squad(s).</text>
+	</string>
+	<string id="st_wrfr_cmd_controlled">
+		<text>%s is now under your control.</text>
+	</string>
+	<string id="st_wrfr_cmd_released">
+		<text>%s released to AI control.</text>
+	</string>
+	<string id="st_wrfr_cmd_new_det_named">
+		<text>%s (New)</text>
+	</string>
+	<string id="st_wrfr_cmd_remove_one">
+		<text>Remove from Detachment</text>
+	</string>
+	<string id="st_wrfr_cmd_disband_one">
+		<text>Disband</text>
+	</string>
+	<string id="st_wrfr_cmd_grp_sel_submenu">
+		<text>Group</text>
+	</string>
+	<string id="st_wrfr_cmd_group_submenu">
+		<text>Add to Detachment</text>
+	</string>
+	<!-- How a submenu title and one of its leaves collapse into a single row on engines without
+	     submenu support (e.g. "Attack" + "Alpha" -> "Attack: Alpha"). -->
+	<string id="st_wrfr_cmd_flat_fmt">
+		<text>%s: %s</text>
+	</string>
+	<string id="st_wrfr_cmd_max_det">
+		<text>Maximum detachments reached (10).</text>
+	</string>
+	<string id="st_wrfr_cmd_hdr_det">
+		<text>Detachment %s</text>
+	</string>
+	<string id="st_wrfr_cmd_hdr_dets">
+		<text>Detachments</text>
+	</string>
+	<string id="st_wrfr_cmd_hdr_cmd">
+		<text>Order your forces here</text>
+	</string>
+	<string id="st_wrfr_cmd_hdr_sel">
+		<text>Selected Squads</text>
+	</string>
+	<string id="st_wrfr_cmd_send_all">
+		<text>Send all from %s</text>
+	</string>
+	<string id="st_wrfr_cmd_take_all">
+		<text>Take all to %s</text>
+	</string>
+	<string id="st_wrfr_cmd_untarget">
+		<text>Remove target</text>
+	</string>
+	<string id="st_wrfr_cmd_untargeted">
+		<text>Removed %s from %s's targets</text>
+	</string>
+	<string id="st_wrfr_prop_last_observed">
+		<text>Last observed</text>
+	</string>
+	<string id="st_wrfr_prop_intel_age">
+		<text>Intel age</text>
+	</string>
+	<string id="st_wrfr_prop_time_culc_day">
+		<text>%sd + %sh</text>
+	</string>
+	<!-- Relations tab: what warfare has pending for a faction pair. -->
+	<string id="st_wrfr_rel_flush">
+		<text>Next relation move in %s</text>
+	</string>
+	<string id="st_wrfr_rel_budget">
+		<text>Daily limit: %s</text>
+	</string>
+	<string id="st_wrfr_rel_nolimit">
+		<text>No daily limit</text>
+	</string>
+	<string id="st_wrfr_rel_static">
+		<text>Relations are not moving</text>
+	</string>
+	<string id="st_wrfr_rel_standing">
+		<text>Standing</text>
+	</string>
+	<string id="st_wrfr_rel_goodwill">
+		<text>Their standing with you</text>
+	</string>
+	<string id="st_wrfr_rel_canon">
+		<text>Canon</text>
+	</string>
+	<string id="st_wrfr_rel_drift">
+		<text>Drift</text>
+	</string>
+	<string id="st_wrfr_rel_lands">
+		<text>Next flush</text>
+	</string>
+	<string id="st_wrfr_rel_moved">
+		<text>Today</text>
+	</string>
+	<string id="st_wrfr_rel_today">
+		<text>Left today</text>
+	</string>
+	<string id="st_wrfr_rel_excluded">
+		<text>Takes no part in relation changes</text>
+	</string>
+</string_table>

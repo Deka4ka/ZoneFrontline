@@ -1,0 +1,245 @@
+<?xml version="1.0" encoding="windows-1251"?>
+
+<!--
+    EXTRA WARFARE STRINGS 
+-->
+
+<string_table>
+    <string id="st_wrfr_request_squad_1">
+        <text>База, запрашиваю отряд в %s, приём?</text>
+    </string>
+    <string id="st_wrfr_request_squad_2">
+        <text>Приём, база, нам нужен отряд в %s, слышите?</text>
+    </string>
+    <string id="st_wrfr_request_squad_3">
+        <text>Приём, база, запрашиваю отряд в %s, конец связи.</text>
+    </string>
+    <string id="st_wrfr_request_squad_4">
+        <text>База, вы меня слышите? Нужен отряд в %s, конец связи.</text>
+    </string>
+    <string id="st_wrfr_request_squad_5">
+        <text>База, нам срочно нужен отряд в %s, конец связи.</text>
+    </string>
+
+    <string id="st_wrfr_respond_affirmative_1">
+        <text>Понял, отправляем отряд из %s на ваше местоположение.</text>
+    </string>
+    <string id="st_wrfr_respond_affirmative_2">
+        <text>Слышим вас, высылаем отряд из %s к вам немедленно.</text>
+    </string>
+    <string id="st_wrfr_respond_affirmative_3">
+        <text>Вас понял, мы отправляем отряд из %s к вам немедленно.</text>
+    </string>
+    <string id="st_wrfr_respond_affirmative_4">
+        <text>Подтверждаю, команда на развертывание отряда из %s по вашему местоположению.</text>
+    </string>
+    <string id="st_wrfr_respond_affirmative_5">
+        <text>Вас понял, отряд из %s уже выдвигается на ваше местоположение.</text>
+    </string>
+
+    <string id="st_wrfr_respond_out_of_squads">
+        <text>На данный момент свободных отрядов нет; направляем следующий отряд из %s к вам.</text>
+    </string>
+    <string id="st_wrfr_respond_not_out_of_squads">
+        <text>Отряд выдвигается к: %s.</text>
+    </string>
+    <string id="st_wrfr_canc_req_backup">
+        <text>Отменить запросы на отряды для этого объекта</text>
+    </string>
+    <string id="ui_mm_alife_warfare_faction_ignore_empty_targets">
+        <text>Игнорировать пустые базы</text>
+    </string>
+    <string id="st_wrfr_req_squad">
+        <text>Запросить отряд на этот объект</text>
+    </string>
+
+    <string id="st_wrfr_respond_ontheway_1">
+        <text>Держитесь, мы уже направляемся к %s.</text>
+    </string>
+    <string id="st_wrfr_respond_ontheway_2">
+        <text>Эй, мы уже в пути к %s, приём.</text>
+    </string>
+    <string id="st_wrfr_respond_ontheway_3">
+        <text>База уже отправила нас по вашим координатам, в %s.</text>
+    </string>
+    <string id="st_wrfr_respond_ontheway_4">
+        <text>Мы уже движемся к %s, не волнуйтесь.</text>
+    </string>
+    <string id="st_wrfr_respond_ontheway_5">
+        <text>Внимание, мы уже направляемся к %s.</text>
+    </string>
+
+    <string id="st_wrfr_respond_negative_1">
+        <text>Отрицательно, рядом с вами нет баз для подкрепления, конец связи.</text>
+    </string>
+    <string id="st_wrfr_respond_negative_2">
+        <text>Невозможно, в вашем районе нет баз.</text>
+    </string>
+    <string id="st_wrfr_respond_negative_3">
+        <text>Отрицательно, в вашем районе нет баз, конец связи.</text>
+    </string>
+    <string id="st_wrfr_respond_negative_4">
+        <text>Невозможно, у нас нет баз в зоне вашего района.</text>
+    </string>
+    <string id="st_wrfr_respond_negative_5">
+        <text>Невозможно, рядом с вами нет баз для подкрепления.</text>
+    </string>
+
+    <string id="st_wrfr_invasion_attack">
+        <text>Союзные силы из %s начинают атаку на %s.</text>
+    </string>
+    <string id="st_wrfr_invasion_defense_incoming">
+        <text>Вражеские силы приближаются к %s.</text>
+    </string>
+
+    <string id="st_wrfr_invasion_defense_clear_1">
+        <text>База, силы противника, направленные к %s, уничтожены, конец связи.</text>
+    </string>
+    <string id="st_wrfr_invasion_defense_clear_2">
+        <text>Отличная работа, парни — мы их перебили! Все в %s могут отдохнуть.</text>
+    </string>
+    <string id="st_wrfr_invasion_defense_clear_3">
+        <text>Хорошая работа, ребята. Кажется противников, напавших на %s, больше нет ни одного.</text>
+    </string>
+    <string id="st_wrfr_invasion_defense_clear_4">
+        <text>Похоже, всё чисто — %s в безопасности.</text>
+    </string>
+    <string id="st_wrfr_invasion_defense_clear_5">
+        <text>Приём, база, мы отбили силы, атаковавшие %s, конец связи.</text>
+    </string>
+
+    <string id="st_wrfr_invasion_defense_fullyreinforced">
+        <text>Вражеские силы приближаются к %s. Подкрепление уже выслано.</text>
+    </string>
+    <string id="st_wrfr_invasion_defense_partlyreinforced">
+        <text>Вражеские силы приближаются к %s. Запрашиваю дополнительные подкрепления!</text>
+    </string>
+    <string id="st_wrfr_invasion_defense_notreinforced">
+        <text>Вражеские силы приближаются к %s. Нужны подкрепления!</text>
+    </string>
+    <string id="st_wrfr_invasion_defense_retreating">
+        <text>Вражеские силы приближаются к %s. Союзные войска отступают.</text>
+    </string>
+    <string id="st_wrfr_task_cancellation">
+        <text>Задание %s отменено из-за непредвиденной гибели %s.</text>
+    </string>
+
+    <!--
+        Template is: st_warfare_<faction>_created_
+        where <faction> is one of:
+        "stalker","bandit","csky","dolg","freedom","killer","army","ecolog","monolith","renegade","greh","isg"
+        with these arguments:
+        $smart - name of the smart terrain where the squad was created
+        $role - translated name of assigned role (Barman, Trader, Medic, Mechanic)
+        -->
+    <string id="st_warfare_stalker_created_1">
+        <text>Сталкеры, всем привет, я ваш новый $role. Жду вас на $smart.</text>
+    </string>
+    <string id="st_warfare_stalker_created_2">
+        <text>Мужики, привет. Раз желающих нет, то я занял роль $role на $smart</text>
+    </string>
+    <string id="st_warfare_stalker_created_3">
+        <text>Сидорович отправил меня сюда как $role, закупайтесь у меня на $smart.</text>
+    </string>
+    <string id="st_warfare_bandit_created_1">
+        <text>Эй, братва, новый $role на $smart. Подъезжайте, цены — огонь!</text>
+    </string>
+    <string id="st_warfare_bandit_created_2">
+        <text>Слышь, пацаны, я теперь $role на $smart. Заходите, не стесняйтесь.</text>
+    </string>
+    <string id="st_warfare_bandit_created_3">
+        <text>Привет, браток! Твой новый $role обосновался на $smart. Заглядывай по делам.</text>
+    </string>
+    <string id="st_warfare_csky_created_1">
+        <text>Внимание, учёные! Новый $role на $smart. Приходите за припасами.</text>
+    </string>
+    <string id="st_warfare_csky_created_2">
+        <text>Коллеги, я занял должность $role на $smart. Жду вас для снабжения.</text>
+    </string>
+    <string id="st_warfare_csky_created_3">
+        <text>Лебедев назначил меня $role на $smart. Обращайтесь по необходимости.</text>
+    </string>
+    <string id="st_warfare_dolg_created_1">
+        <text>Внимание всем бойцам! Новый $role на $smart. Явка обязательна.</text>
+    </string>
+    <string id="st_warfare_dolg_created_2">
+        <text>Товарищи, приказом Генерала я назначен $role на $smart. Жду по уставу.</text>
+    </string>
+    <string id="st_warfare_dolg_created_3">
+        <text>Бойцы Долга, ваш $role развернул позицию на $smart. Подходите за снаряжением.</text>
+    </string>
+    <string id="st_warfare_freedom_created_1">
+        <text>Йо, анархисты! Ваш $role на $smart открыт для бизнеса. Налетай!</text>
+    </string>
+    <string id="st_warfare_freedom_created_2">
+        <text>Братья по свободе, я теперь $role на $smart. Заходите, всегда рад своим.</text>
+    </string>
+    <string id="st_warfare_freedom_created_3">
+        <text>Че, народ! Теперь я $role на $smart. Приходите, обсудим дела за пивком.</text>
+    </string>
+    <string id="st_warfare_killer_created_1">
+        <text>Контракт выполнен. Я теперь $role на $smart. Только по делу.</text>
+    </string>
+    <string id="st_warfare_killer_created_2">
+        <text>Новый $role на $smart. Если нужны услуги — знаешь расценки.</text>
+    </string>
+    <string id="st_warfare_killer_created_3">
+        <text>Занял позицию $role на $smart. Без лишних слов, только бизнес.</text>
+    </string>
+    <string id="st_warfare_army_created_1">
+        <text>Внимание! По приказу командования развёрнут $role на $smart. Явка строго обязательна.</text>
+    </string>
+    <string id="st_warfare_army_created_2">
+        <text>Солдаты, я назначен $role на $smart. Докладывать по регламенту.</text>
+    </string>
+    <string id="st_warfare_army_created_3">
+        <text>Личному составу: $role на $smart к вашим услугам. Соблюдайте дисциплину.</text>
+    </string>
+    <string id="st_warfare_ecolog_created_1">
+        <text>Коллеги-учёные, я назначен $role на $smart. Жду для обмена данными.</text>
+    </string>
+    <string id="st_warfare_ecolog_created_2">
+        <text>Внимание, исследовательская группа! Ваш $role развернул базу на $smart. Заходите за отчётами.</text>
+    </string>
+    <string id="st_warfare_ecolog_created_3">
+        <text>Сахаров утвердил меня как $role на $smart. Обращайтесь по научным вопросам.</text>
+    </string>
+    <string id="st_warfare_monolith_created_1">
+        <text>Монолит повелевает! Я назначен $role на $smart. Приходите за благословением.</text>
+    </string>
+    <string id="st_warfare_monolith_created_2">
+        <text>Братья по вере, Монолит направил меня как $role на $smart. Служим!</text>
+    </string>
+    <string id="st_warfare_monolith_created_3">
+        <text>Монолит велик! Ваш $role ждёт верных на $smart. Слава Монолиту!</text>
+    </string>
+    <string id="st_warfare_renegade_created_1">
+        <text>Эй, отбросы! Ваш $role на $smart. Кто с бабками — заходи.</text>
+    </string>
+    <string id="st_warfare_renegade_created_2">
+        <text>Слышь, падла, я теперь $role на $smart. Цены — для своих.</text>
+    </string>
+    <string id="st_warfare_renegade_created_3">
+        <text>Че надо? Я $role на $smart. Не базарь много, делай дело.</text>
+    </string>
+    <string id="st_warfare_greh_created_1">
+        <text>Грешники... Зона приняла меня как $role на $smart. Искупление близко...</text>
+    </string>
+    <string id="st_warfare_greh_created_2">
+        <text>Слепые видят истину... Я теперь $role на $smart. Зона покажет путь...</text>
+    </string>
+    <string id="st_warfare_greh_created_3">
+        <text>Зона милосердна... $role на $smart ждёт кающихся. Придите за прощением...</text>
+    </string>
+    <string id="st_warfare_isg_created_1">
+        <text>Оперативник на связи. $role на $smart. Только деловое общение.</text>
+    </string>
+    <string id="st_warfare_isg_created_2">
+        <text>Позывной подтверждён. Я $role на $smart. Конфиденциально.</text>
+    </string>
+    <string id="st_warfare_isg_created_3">
+        <text>Секретный протокол. $role развёрнут на $smart. Без лишних вопросов.</text>
+    </string>
+
+
+</string_table>

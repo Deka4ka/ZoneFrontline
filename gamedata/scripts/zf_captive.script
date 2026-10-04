@@ -1,0 +1,341 @@
+local C = zf_core
+local NEVER = { monolith = true, zombied = true, greh = true }
+local DISCIPLINE = { bandit = 1.4, renegade = 1.3, stalker = 1.2, ecolog = 1.5, csky = 1.0, freedom = 1.0,
+    killer = 0.7, army = 0.8, dolg = 0.5, isg = 0.4 }
+local RANK = { novice = 1.6, trainee = 1.4, experienced = 1.1, professional = 0.9, veteran = 0.6,
+    expert = 0.4, master = 0.25, legend = 0.1 }
+local PAY = { novice = 300, trainee = 450, experienced = 700, professional = 1000, veteran = 1500,
+    expert = 2000, master = 3000, legend = 4000 }
+local EXECUTE = { monolith = 1.0, greh = 0.5, renegade = 0.4, bandit = 0.3, isg = 0.2, killer = 0.15,
+    dolg = 0.1, army = 0.05, freedom = 0.02 }
+local rolled = {}
+local executing = {}
+local pass = 0
+local shout = 0
+local function captives()
+    return C.store("captive")
+end
+function mark_informant(id)
+    local c = captives()[id]
+    if c then c.cls = "radio" end
+end
+function is_captive(id)
+    return captives()[id] ~= nil
+end
+local function on_enemy_eval(obj, enemy, flags)
+    local cap = captives()
+    if next(cap) == nil then return end
+    local a, b = obj:id(), enemy:id()
+    if executing[a] == b then
+        flags.override, flags.result = true, true
+    elseif cap[a] or cap[b] then
+        flags.override, flags.result = true, false
+    end
+end
+local function odds_around(npc, f)
+    local pos, foes, mates = npc:position(), 0, 0
+    local r = C.cfg("surrender_odds_radius", 40)
+    local function count(o)
+        if o and o:id() ~= npc:id() and o:alive() and o:position():distance_to(pos) <= r then
+            local of = C.community(o)
+            if of == f then mates = mates + 1 elseif C.enemies(of, f) then foes = foes + 1 end
+        end
+    end
+    for _, id in pairs(db.OnlineStalkers) do
+        if not captives()[id] then count(level.object_by_id(id)) end
+    end
+    for _, p in ipairs(C.players()) do count(p) end
+    return foes, mates
+end
+function surrender_chance(npc, bonus)
+    local f = C.community(npc)
+    if NEVER[f] or not DISCIPLINE[f] then return 0 end
+    local hp, line = npc.health, C.cfg("surrender_hp", 0.45)
+    if hp > line and not bonus then return 0 end
+    local p = C.cfg("surrender_base", 0.35) * DISCIPLINE[f] * (RANK[ranks.get_obj_rank_name(npc)] or 1)
+    p = p * (0.6 + math.max(0, line - hp) / line) * (bonus or 1)
+    local wpn = npc:active_item()
+    if not wpn or IsMelee(wpn) then p = p * 1.6
+    elseif IsPistol(wpn) then p = p * 1.3
+    elseif IsLauncher(wpn) then p = p * 0.7
+    elseif IsSniper(wpn) then p = p * 0.9 end
+    local outfit = npc:item_in_slot(7)
+    local kind = outfit and ini_sys:r_string_ex(outfit:section(), "kind")
+    if kind == "o_heavy" then p = p * 0.6 elseif not outfit or kind == "o_light" then p = p * 1.2 end
+    local foes, mates = odds_around(npc, f)
+    if foes == 0 then return 0 end
+    p = p * math.min(1.8, math.max(0.5, 0.5 + 0.35 * (foes + 1) / (mates + 1)))
+    if mates == 0 then p = p * 1.3 end
+    p = p * zf_classes.surrender_factor(npc)
+    local se = alife_object(npc:id())
+    local sq = se and se.group_id and se.group_id ~= 65535 and alife_object(se.group_id)
+    if sq then
+        if zf_tactics.encircled(sq.current_target_id, f) then p = p * 2 end
+        if (C.store("fanatic")[sq.id] or 0) > C.now() then p = p * 0.4 end
+        if (C.store("retreat")[sq.id] or 0) > C.now() then p = p * 1.4 end
+    end
+    return math.min(C.cfg("surrender_max", 0.6), p)
+end
+local function eligible(npc)
+    local id = npc:id()
+    if captives()[id] or C.wears(id) or not npc:alive() or not IsStalker(npc) then return false end
+    if get_object_story_id(id) or npc:has_info("npcx_is_companion") then return false end
+    if XrrPlayers and XrrPlayers():IsPlayerDummy(id) then return false end
+    if xr_wounded.is_wounded(npc) then return false end
+    return true
+end
+local noted = {}
+function surrender(npc, captor, hold)
+    local wpn = npc:active_item()
+    if wpn then npc:drop_item(wpn) end
+    if not C.set_logic(npc, "remark@zf_hands_up") then return false end
+    local t = C.now()
+    local c = { f = C.community(npc), by = captor, t = t, hold = hold,
+        rank = ranks.get_obj_rank_name(npc) or "novice", cls = zf_classes.class_of(npc:id()) }
+    if captor and math.random() < (EXECUTE[captor] or 0) * C.cfg("execution_mult", 1.0) then
+        c.exec_at = t + C.rand(C.cfg("execution_min_s", 600), C.cfg("execution_max_s", 1800))
+    end
+    captives()[npc:id()] = c
+    C.log("surrender: %s (%s, %s, %s) to %s", npc:name(), c.f, c.rank, c.cls, captor)
+    local pair = tostring(captor) .. "|" .. tostring(c.f)
+    if captor and (noted[pair] or 0) <= time_global() then
+        noted[pair] = time_global() + 300000
+        C.note("war", { captor, c.f }, C.text("zf_j_surrender", nil, C.faction_name(c.f), C.faction_name(captor)))
+    end
+    return true
+end
+function try(npc, captor, bonus)
+    local t = time_global()
+    if (rolled[npc:id()] or 0) > t then return false end
+    rolled[npc:id()] = t + C.cfg("surrender_roll_s", 15) * 1000
+    if math.random() >= surrender_chance(npc, bonus) then return false end
+    return surrender(npc, captor)
+end
+local function on_hit(npc, amount, dir, who)
+    if not (who and amount > 0 and eligible(npc)) then return end
+    if not (who:id() == AC_ID or IsStalker(who) or (XrrPlayers and XrrPlayers():IsPlayerDummy(who:id()))) then return end
+    local captor = C.community(who)
+    if C.human(captor) and C.enemies(C.community(npc), captor) then try(npc, captor) end
+end
+function on_morale_break(squad)
+    for m in squad:squad_members() do
+        local npc = level.object_by_id(m.id)
+        if npc and eligible(npc) then try(npc, nil, 1.5) end
+    end
+end
+local function release_npc(npc)
+    local se = alife_object(npc:id())
+    if se then alife_release(se) end
+end
+local function count_pow(holder, prisoner)
+    if not (C.human(holder) and C.human(prisoner)) then return end
+    local key = holder .. "|" .. prisoner
+    local pow = C.store("pow")
+    pow[key] = (pow[key] or 0) + 1
+end
+local function drop(id)
+    local c = captives()[id]
+    captives()[id] = nil
+    if c and c.guard then executing[c.guard] = nil end
+end
+local function take(npc, c, player)
+    drop(npc:id())
+    C.restore_logic(npc)
+    count_pow(C.community(player), c.f)
+    local mult = (zf_classes.PRISONER_PAY[c.cls] or 1) * C.cfg("pow_pay_mult", 1.0)
+    C.reward(player, (PAY[c.rank] or 500) * mult, "zf_news_pow_reward")
+    if c.cls == "commander" or c.cls == "radio" then zf_classes.reveal(c.f, player) end
+    C.log("prisoner taken by a player: %s (%s, %s)", npc:name(), c.f, c.cls)
+    release_npc(npc)
+end
+local function free_captive(npc, c, by_player)
+    drop(npc:id())
+    C.restore_logic(npc)
+    rolled[npc:id()] = time_global() + 600000
+    local se = alife_object(npc:id())
+    local sq = se and se.group_id and se.group_id ~= 65535 and alife_object(se.group_id)
+    if sq then C.send_home(sq, 4) end
+    if by_player then C.local_news("zf_news_pow_freed", c.f, "news") end
+end
+local function settle(npc, c)
+    local foes, mates = odds_around(npc, c.f)
+    if foes > mates and foes > 0 then
+        drop(npc:id())
+        C.restore_logic(npc)
+        count_pow(c.by, c.f)
+        C.log("prisoner taken away: %s (%s) by %s", npc:name(), c.f, c.by)
+        release_npc(npc)
+    else
+        free_captive(npc, c)
+    end
+end
+local function around(pos, c, r)
+    local friends, captors = {}, {}
+    for _, id in pairs(db.OnlineStalkers) do
+        local o = not captives()[id] and level.object_by_id(id)
+        if o and o:alive() and not C.is_player(o) then
+            local d = o:position():distance_to(pos)
+            if d <= r then
+                local f = C.community(o)
+                if f == c.f then friends[#friends + 1] = { o = o, d = d }
+                elseif c.by and f == c.by then captors[#captors + 1] = { o = o, d = d } end
+            end
+        end
+    end
+    table.sort(captors, function(a, b) return a.d < b.d end)
+    table.sort(friends, function(a, b) return a.d < b.d end)
+    return friends, captors
+end
+local function captor_players_near(pos, c, r)
+    for _, p in ipairs(C.players()) do
+        if p:position():distance_to(pos) <= r and (c.by == nil or C.community(p) == c.by) then return true end
+    end
+    return false
+end
+local function valid_guard(id, pos)
+    local g = id and level.object_by_id(id)
+    return g and g:alive() and C.wears(id) == "remark@zf_guard" and g:position():distance_to(pos) <= 40 and g or nil
+end
+local function call_rescue(npc, c)
+    c.rescue = true
+    local chance = C.cfg("rescue_chance", 0.4) * ((c.cls == "commander" or c.cls == "radio") and 1.5 or 1)
+    if not C.human(c.f) or math.random() > chance then return end
+    local se = alife_object(npc:id())
+    local gp = se and C.gpos(se)
+    local sm = gp and C.smarts_on_level(C.player_level(npc))
+    if not sm then return end
+    local spot, bd
+    for _, s in ipairs(sm) do
+        local d = s.position:distance_to(npc:position())
+        if not bd or d < bd then spot, bd = s, d end
+    end
+    for _, sq in ipairs(spot and C.nearest_free(c.f, gp, C.cfg("rescue_radius", 600), 1) or {}) do
+        if C.send(sq, spot.id, 2) then C.log("rescue: %s squad goes for %s", c.f, npc:name()) end
+    end
+end
+local function interrogate(npc, c, captors)
+    local who
+    for _, e in ipairs(captors) do
+        local cls = zf_classes.class_of(e.o:id())
+        if e.d <= 15 and (cls == "commander" or cls == "radio") then who = e.o break end
+    end
+    who = who or (captors[1] and captors[1].d <= 15 and captors[1].o)
+    if not who then return end
+    c.asked = true
+    if who:id() ~= c.guard and C.act(who, "remark@zf_interrogate", 10) then C.face(who, "claim", npc) end
+    local se = alife_object(npc:id())
+    local gp = se and C.gpos(se)
+    local base = gp and C.nearest_own_base(c.f, gp)
+    if base and C.human(c.by) then C.store("scouted")[c.by .. "|" .. base.id] = C.now() + 24 * C.HOUR end
+    if c.by == warfare.actor_faction then zf_classes.reveal(c.f, nil) end
+    C.log("interrogation: %s questioned by %s", npc:name(), who:name())
+end
+local function execute_step(npc, c, captors)
+    local g = c.guard and level.object_by_id(c.guard)
+    local who = (g and g:alive() and g) or (captors[1] and captors[1].d <= 30 and captors[1].o)
+    if not who then return end
+    executing[who:id()] = npc:id()
+    c.guard = who:id()
+    C.hostile(who, npc)
+    if time_global() - shout > 600000 and C.nearest_player(npc:position(), C.player_level(npc)) then
+        local _, d = C.nearest_player(npc:position(), C.player_level(npc))
+        if d and d < 150 then
+            shout = time_global()
+            C.report("war", { c.by, c.f }, true, "zf_news_execution", nil, "danger", C.faction_name(c.by), C.faction_name(c.f))
+        end
+    end
+end
+local function npc_side(npc, c, t)
+    local pos = npc:position()
+    local friends, captors = around(pos, c, 40)
+    local held = (captors[1] and captors[1].d <= 30) or captor_players_near(pos, c, 30)
+    local f1 = friends[1]
+    if not held and f1 and f1.d <= C.cfg("capture_dist", 2.5) + 0.5 and not f1.o:best_enemy() then
+        C.log("prisoner %s freed by his own", npc:name())
+        return free_captive(npc, c)
+    end
+    if c.exec_at and t >= c.exec_at then return execute_step(npc, c, captors) end
+    local g = valid_guard(c.guard, pos)
+    if not g then
+        c.guard = nil
+        for _, e in ipairs(captors) do
+            if C.act(e.o, "remark@zf_guard", C.cfg("guard_s", 120)) then
+                c.guard, g = e.o:id(), e.o
+                break
+            end
+        end
+    end
+    if g then C.face(g, "threat", npc) end
+    if not c.healed and npc.health < 0.5 then
+        for _, e in ipairs(captors) do
+            if e.d <= 30 and zf_classes.class_of(e.o:id()) == "medic" then
+                c.healed = true
+                npc:set_health_ex(0.6)
+                if C.act(e.o, "remark@zf_dress", 6) then C.face(e.o, "field_dress", npc) end
+                break
+            end
+        end
+    end
+    if not c.asked and t - c.t > C.cfg("interrogate_after_s", 300) and #captors > 0 then
+        interrogate(npc, c, captors)
+    end
+    if not c.rescue then call_rescue(npc, c) end
+    if g or #captors > 0 or captor_players_near(pos, c, 30) then
+        c.alone = nil
+    else
+        c.alone = c.alone or t
+        local lvl = C.rank_level(npc)
+        if t - c.alone > C.cfg("escape_alone_s", 600) and math.random() < C.cfg("escape_chance", 0.1) * (0.5 + lvl * 0.15) then
+            C.log("prisoner %s escaped", npc:name())
+            C.report("war", { c.f, c.by }, c.by == warfare.actor_faction, "zf_news_pow_escaped", nil, "news",
+                C.faction_name(c.f))
+            free_captive(npc, c)
+            if c.by then zf_life.pursue(C.squad_of(npc:id()), c.by, 1) end
+            return
+        end
+    end
+end
+local function resolve()
+    local cap = captives()
+    if next(cap) == nil then return end
+    pass = pass + 1
+    local ps, t = C.players(), C.now()
+    local far = alife():switch_distance() * 0.8
+    local reach = C.cfg("capture_dist", 2.5)
+    for id, c in pairs(cap) do
+        local npc = level.object_by_id(id)
+        if not (npc and npc:alive()) then
+            if c.guard and executing[c.guard] == id then C.log("prisoner %s executed", id) end
+            drop(id)
+        else
+            C.ensure_logic(npc, "remark@zf_prisoner")
+            local pos, done = npc:position(), false
+            for _, p in ipairs(ps) do
+                if not done and p:position():distance_to(pos) <= reach then
+                    if C.enemies(c.f, C.community(p)) then take(npc, c, p) else free_captive(npc, c, true) end
+                    done = true
+                end
+            end
+            if not done and (db.actor:position():distance_to(pos) > far
+                or t > (c.hold or (c.t + C.cfg("captive_wait_s", 900)))) then
+                settle(npc, c)
+            elseif not done and pass % 3 == 0 then
+                npc_side(npc, c, t)
+            end
+        end
+    end
+    for g, pid in pairs(executing) do
+        if not cap[pid] then executing[g] = nil end
+    end
+end
+function on_game_start()
+    RegisterScriptCallback("on_enemy_eval", on_enemy_eval)
+    RegisterScriptCallback("npc_on_hit_callback", C.guard("zf_captive.hit", on_hit))
+    C.every("zf_captive", 1, resolve, true)
+    C.every("zf_captive_prune", 600, function()
+        local t = time_global()
+        for id, until_t in pairs(rolled) do
+            if until_t < t then rolled[id] = nil end
+        end
+    end, true)
+end

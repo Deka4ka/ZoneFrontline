@@ -1,0 +1,18 @@
+local DIALOG = [[
+<dialog id="zf_hire_dialog">
+	<precondition>zf_hire.dlg_offer</precondition>
+	<init_func>zf_hire.dm_init</init_func>
+</dialog>
+]]
+function on_xml_read()
+    RegisterScriptCallback("on_xml_read", function(xml_file_name, xml_obj)
+        if xml_file_name ~= [[gameplay\dialogs.xml]] then return end
+        local ok, err = pcall(function()
+            if not xml_obj:query("dialog[id=zf_hire_dialog]")[1] then xml_obj:insertFromXMLString(DIALOG) end
+        end)
+        if not ok then printf("![ZF] hire dialog: %s", tostring(err)) end
+    end)
+    RegisterScriptCallback("on_specific_character_dialog_list", function(character_id, dialogs)
+        pcall(dialogs.add, dialogs, "zf_hire_dialog")
+    end)
+end

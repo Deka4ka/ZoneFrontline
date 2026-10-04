@@ -1,0 +1,382 @@
+-- MCM presentation hooks for the warfare options tree: track value formats, hint tooltips, collapsible section headers.
+
+local TIME_UNITS = { time_d = 1, time_dh = 2, time_dhm = 3, time_dhms = 4 }
+
+local function update_ctrl_text(ctrl, fmt, value)
+    if not fmt then
+        return
+    end
+    if fmt == "percent" then
+        ctrl:SetText(string.format("%s%%", value))
+        return
+    end
+    if fmt == "meters" then
+        ctrl:SetText(string.format("%sm", value))
+        return
+    end
+    local max_i = TIME_UNITS[fmt]
+    if not max_i then
+        return
+    end
+    local v = (tonumber(value) or 0) * 6
+    local all = { { math.floor(v / 86400), "d" }, { math.floor((v % 86400) / 3600), "h" }, { math.floor((v % 3600) / 60), "m" }, { math.floor(v % 60), "s" } }
+    local parts = {}
+    for i = 1, max_i do
+        if all[i][1] ~= 0 or #parts > 0 then
+            parts[#parts + 1] = all[i][1] .. all[i][2]
+        end
+    end
+    ctrl:SetText(#parts > 0 and table.concat(parts, " ") or "0" .. all[max_i][2])
+end
+
+local ui_options_UIOptions_callback_track = ui_options.UIOptions.Callback_Track
+function ui_options.UIOptions.Callback_Track(self, ctrl, path, opt, v, value)
+    ui_options_UIOptions_callback_track(self, ctrl, path, opt, v, value)
+    warfare_log.trace("modxml_warfare_ui.Callback_Track: path=%s opt=%s value=%s", tostring(path), tostring(opt), tostring(value))
+    update_ctrl_text(ctrl, v.fmt, value)
+end
+
+local ui_options_UIOptions_register_track = ui_options.UIOptions.Register_Track
+function ui_options.UIOptions.Register_Track(self, xml, handler, path, opt, v, flags)
+    local h = ui_options_UIOptions_register_track(self, xml, handler, path, opt, v, flags)
+    local track = self._Track[ui_options.cc(path, opt)]
+    update_ctrl_text(track.txt, v.fmt, track.value)
+    return h
+end
+
+local function cap_id(id)
+    return (string.gsub(id, "/", "_"))
+end
+
+local function row_label(path, row)
+    return game.translate_string("ui_mm_" .. (row.hint or cap_id(ui_options.cc(path, row.id))))
+end
+
+-- Hint tooltips: resolve "ui_mm_<hint>_desc" at registration and serve it on hover (vanilla only matches by option path).
+local cap_desc = {}
+
+local ui_options_UIOptions_register_cap = ui_options.UIOptions.Register_Cap
+function ui_options.UIOptions.Register_Cap(self, xml, handler, id, hint)
+    local h = ui_options_UIOptions_register_cap(self, xml, handler, id, hint)
+    if hint then
+        local str = "ui_mm_" .. hint .. "_desc"
+        local desc = game.translate_string(str)
+        if desc ~= str then
+            cap_desc[cap_id(id)] = desc
+        end
+    end
+    return h
+end
+
+-- Keyed by bare section id, shared by every page and all 13 faction groups: prefix ids per page.
+local section_open_state = {}
+
+local function section_is_open(section_id)
+    return section_open_state[section_id] == true
+end
+
+local pending_rebuild
+
+-- Rebuild the current page on the next Update, keeping the scroll position. Callers that run
+-- from a control callback must use this: Reset_opt frees the control mid-callback otherwise.
+function request_rebuild(dlg)
+    local scroll = dlg.scroll_opt
+    pending_rebuild = { pos = scroll and scroll:GetCurrentScrollPos() or 0 }
+end
+
+local function toggle_section(section_id, dlg)
+    section_open_state[section_id] = not section_is_open(section_id)
+    warfare_log.trace("modxml_warfare_ui.toggle_section: %s -> %s",
+        tostring(section_id), tostring(section_open_state[section_id]))
+    request_rebuild(dlg)
+end
+
+local function apply_pending_rebuild(dlg)
+    local p = pending_rebuild
+    pending_rebuild = nil
+    if not (dlg.last_curr_tree and dlg.last_path) then
+        return
+    end
+    dlg:Reset_opt(dlg.last_curr_tree, dlg.last_path)
+    dlg:UpdatePending()
+    local scroll = dlg.scroll_opt
+    -- Clear() scrolls to top; SetScrollPos recalcs the pad first and clamps to the new range.
+    if scroll and p.pos > 0 then
+        scroll:SetScrollPos(p.pos)
+    end
+end
+
+-- Section header labels of the current page, keyed like _Cap; orange while a row of the section is pending.
+local NORMAL = GetARGB(255, 200, 200, 200)
+local HOVER  = GetARGB(255, 228, 236, 226)
+local headers = {}
+
+local function section_dirty(path, rows)
+    local pending = ui_options.opt_temp
+    for i = 1, #rows do
+        if pending[ui_options.cc(path, rows[i].id)] ~= nil then
+            return true
+        end
+    end
+    return false
+end
+
+local function recolor(h)
+    h.cap:TextControl():SetTextColor(h.hover and HOVER or (h.dirty and ui_options.clr_o) or NORMAL)
+end
+
+local ui_options_UIOptions_update = ui_options.UIOptions.Update
+function ui_options.UIOptions.Update(self)
+    if pending_rebuild then
+        apply_pending_rebuild(self)
+    end
+    ui_options_UIOptions_update(self)
+    for id, h in pairs(headers) do
+        local btn = self._Cap[id]
+        local hover = btn and btn:IsCursorOverWindow() or false
+        if hover ~= h.hover then
+            h.hover = hover
+            recolor(h)
+        end
+    end
+    if self.hint_locked then
+        return
+    end
+    for id, ctrl in pairs(self._Cap) do
+        local desc = cap_desc[id]
+        if desc and ctrl:IsCursorOverWindow() then
+            self.hint_wnd:Update(desc)
+            return
+        end
+    end
+end
+
+-- Tree labels at or under TREE_ROOT, keyed by option path; orange while any option below them is pending.
+-- Vanilla keeps no handle to the label, so Register_Tree is run through a forwarding xml proxy that
+-- records InitTextWnd results: the fill loop runs first, so the i-th one belongs to group[i].
+local TREE_ROOT = "alife/warfare"
+local TREE_NORMAL = GetARGB(255, 180, 180, 180)
+local tree_labels = {}
+
+local function under_root(path)
+    return path == TREE_ROOT or string.sub(path, 1, #TREE_ROOT + 1) == TREE_ROOT .. "/"
+end
+
+local function recolor_tree()
+    local pending = ui_options.opt_temp
+    for path, txt in pairs(tree_labels) do
+        local dirty = false
+        for id in pairs(pending) do
+            if string.sub(id, 1, #path + 1) == path .. "/" then
+                dirty = true
+                break
+            end
+        end
+        txt:SetTextColor(dirty and ui_options.clr_o or TREE_NORMAL)
+    end
+end
+
+local ui_options_UIOptions_register_tree = ui_options.UIOptions.Register_Tree
+function ui_options.UIOptions.Register_Tree(self, tr, path, group, idx)
+    if self.tree[tr] and self.tree[tr][path] then
+        return ui_options_UIOptions_register_tree(self, tr, path, group, idx)
+    end
+    local xml, made = self.xml, {}
+    self.xml = setmetatable({}, { __index = function(_, k)
+        return function(_, ...)
+            local w = xml[k](xml, ...)
+            if k == "InitTextWnd" then
+                made[#made + 1] = w
+            end
+            return w
+        end
+    end })
+    ui_options_UIOptions_register_tree(self, tr, path, group, idx)
+    self.xml = xml
+    for i = 1, #group do
+        local p = (path ~= "") and ui_options.cc(path, group[i].id) or group[i].id
+        if under_root(p) then
+            tree_labels[p] = made[i]
+        end
+    end
+    recolor_tree()
+end
+
+local ui_options_UIOptions_update_pending = ui_options.UIOptions.UpdatePending
+function ui_options.UIOptions.UpdatePending(self)
+    ui_options_UIOptions_update_pending(self)
+    recolor_tree()
+end
+
+-- On_Accept empties opt_temp without UpdatePending, and the dialog's tree windows outlive it.
+local ui_options_UIOptions_on_accept = ui_options.UIOptions.On_Accept
+function ui_options.UIOptions.On_Accept(self)
+    ui_options_UIOptions_on_accept(self)
+    recolor_tree()
+end
+
+-- { {id=, featured={ids}, rows={...}}, ... } -> header, featured rows, then rows gated by precondition.
+function build_sections(sections, leading_rows)
+    local out = {}
+
+    for i = 1, #(leading_rows or {}) do
+        out[#out + 1] = leading_rows[i]
+    end
+
+    for i = 1, #sections do
+        local sec = sections[i]
+        local hidden = {}
+
+        out[#out + 1] = {
+            id = "sec_" .. sec.id,
+            type = "button",
+            hint = "alife_warfare_sec_" .. sec.id,
+            wf_section = sec.id,
+            wf_hidden = hidden,
+            wf_rows = sec.rows,
+            -- Closure, not { fn, id }: Callback_Button's non-final unpack drops extra args.
+            functor_ui = { function(dlg) toggle_section(sec.id, dlg) end },
+        }
+
+        local by_id = {}
+        for k = 1, #sec.rows do
+            by_id[sec.rows[k].id] = sec.rows[k]
+            sec.rows[k].wf_section_of = sec.id
+        end
+        for j = 1, #(sec.featured or {}) do
+            local row = by_id[sec.featured[j]]
+            if not row then
+                error("modxml_warfare_ui.build_sections: featured option '" .. tostring(sec.featured[j])
+                    .. "' is not in section '" .. tostring(sec.id) .. "'")
+            end
+            by_id[row.id] = nil
+            out[#out + 1] = row
+        end
+
+        for j = 1, #sec.rows do
+            local row = sec.rows[j]
+            if by_id[row.id] then
+                if row.precondition then
+                    error("modxml_warfare_ui.build_sections: row '" .. tostring(row.id) .. "' already has a precondition")
+                end
+                row.precondition = { section_is_open, sec.id }
+                row.wf_collapsible = true
+                hidden[#hidden + 1] = row
+                out[#out + 1] = row
+            end
+        end
+    end
+
+    return out
+end
+
+-- Section header "[+] Label (N)" from warfare_mcm.xml. Reset_opt adds 10 to the returned height.
+local SECTION_H = 26
+local RULE_MIN_W = 24
+local GAP = 7
+local TOOLTIP_MAX_ROWS = 12
+
+local mcm_xml
+local function get_mcm_xml()
+    if not mcm_xml then
+        mcm_xml = CScriptXmlInit()
+        mcm_xml:ParseFile("warfare_mcm.xml")
+    end
+    return mcm_xml
+end
+
+-- GetTextWidth is a modded-exe export; fallback ~7 units per glyph (cp1251: 1 byte = 1 glyph).
+local function text_width(wnd, text)
+    local ok, w = pcall(function() return wnd:GetTextWidth() end)
+    if ok and w and w > 0 then
+        return w
+    end
+    return 7 * string.len(text)
+end
+
+local function hidden_tooltip(path, rows)
+    local lines = { game.translate_string("ui_mm_alife_warfare_sec_hidden") .. " " .. #rows }
+    for i = 1, math.min(#rows, TOOLTIP_MAX_ROWS) do
+        lines[#lines + 1] = row_label(path, rows[i])
+    end
+    if #rows > TOOLTIP_MAX_ROWS then
+        lines[#lines + 1] = "..."
+    end
+    -- CUILine::ProcessNewLines splits on the two-char sequence "\\n", not on a real newline.
+    return table.concat(lines, "\\n")
+end
+
+local function place_rules(wxml, handler, x0, x1, half)
+    local mid = (x0 + x1) / 2
+    local sides = { { x0, mid - half }, { mid + half, x1 } }
+    for i = 1, #sides do
+        local sx0, sx1 = sides[i][1], sides[i][2]
+        if sx1 - sx0 >= RULE_MIN_W then
+            local rule = wxml:InitStatic("sec_rule", handler)
+            rule:SetWndPos(vector2():set(sx0, rule:GetWndPos().y))
+            rule:SetWndSize(vector2():set(sx1 - sx0, rule:GetHeight()))
+        end
+    end
+end
+
+local ui_options_UIOptions_reset_opt = ui_options.UIOptions.Reset_opt
+function ui_options.UIOptions.Reset_opt(self, curr_tree, path, flags)
+    headers = {}
+    return ui_options_UIOptions_reset_opt(self, curr_tree, path, flags)
+end
+
+local ui_options_UIOptions_cache_value = ui_options.UIOptions.CacheValue
+function ui_options.UIOptions.CacheValue(self, path, opt, value, v)
+    ui_options_UIOptions_cache_value(self, path, opt, value, v)
+    local h = v and v.wf_section_of and headers[cap_id(ui_options.cc(path, "sec_" .. v.wf_section_of))]
+    if h then
+        h.dirty = section_dirty(path, h.rows)
+        recolor(h)
+    end
+end
+
+local ui_options_UIOptions_register_button = ui_options.UIOptions.Register_Button
+function ui_options.UIOptions.Register_Button(self, xml, handler, path, opt, v, flags)
+    if not (v.wf_section) then
+        return ui_options_UIOptions_register_button(self, xml, handler, path, opt, v, flags)
+    end
+
+    local wxml = get_mcm_xml()
+    local open = section_is_open(v.wf_section)
+    local id_cap = cap_id(ui_options.cc(path, opt))
+    local hidden = v.wf_hidden
+
+    -- Measure the collapsed form in both states so the stretched rules do not move on toggle.
+    local label = row_label(path, v)
+    if #hidden > 0 then
+        label = label .. " (" .. #hidden .. ")"
+    end
+    local closed = "[+] " .. label
+    local cap = wxml:InitStatic("sec_cap", handler)
+    cap:TextControl():SetText(closed)
+    local half = text_width(cap, closed) / 2 + GAP
+    if open then
+        cap:TextControl():SetText("[-] " .. label)
+    end
+    local btn = wxml:Init3tButton("sec_btn", handler)
+
+    local x0 = btn:GetWndPos().x
+    local x1 = x0 + btn:GetWidth()
+    place_rules(wxml, handler, x0, x1, half)
+
+    local h = { cap = cap, rows = v.wf_rows, dirty = section_dirty(path, v.wf_rows), hover = false }
+    headers[id_cap] = h
+    recolor(h)
+
+    -- Tooltip via the caption path: _Cap for hover detection, cap_desc for the text.
+    self._Cap[id_cap] = btn
+    cap_desc[id_cap] = ((not open) and #hidden > 0) and hidden_tooltip(path, hidden) or nil
+
+    local id_ctrl = self:Stacker(path, opt, v)
+    self:Register(btn, id_ctrl)
+    self:AddCallback(id_ctrl, ui_events.BUTTON_CLICKED, function()
+        self:Callback_Button(btn, path, opt, v)
+    end, self)
+
+    return SECTION_H
+end

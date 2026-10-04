@@ -1,0 +1,241 @@
+local C = zf_core
+local cursor = {}
+local function next_faction(kind)
+    local list = C.war_factions()
+    if #list == 0 then return end
+    cursor[kind] = (cursor[kind] or 0) % #list + 1
+    return list[cursor[kind]]
+end
+local function free_squads(f)
+    local out = {}
+    for _, sq in ipairs(C.squads_of(f)) do
+        if C.free(sq) then out[#out + 1] = sq end
+    end
+    return out
+end
+local function on_owner_changed(sm, was, owner)
+    zf_garrison.on_captured(sm, owner)
+    if C.human(owner) and (C.is_base(sm) or (C.human(was) and C.relevant(sm, was, owner))) then
+        C.note("war", { owner, was }, C.text(C.human(was) and "zf_j_captured" or "zf_j_occupied", owner,
+            C.faction_name(owner), C.smart_name(sm), C.faction_name(was)))
+    end
+    if not (C.human(was) and owner ~= "none" and C.enemies(was, owner)) then return end
+    if math.random() > C.cfg("counter_chance", 0.7) then return end
+    local pending, total, mine = C.store("counter"), 0, 0
+    for _, p in pairs(pending) do
+        total = total + 1
+        if p.f == was then mine = mine + 1 end
+    end
+    if total >= C.cfg("counter_queue_max", 20) or mine >= C.cfg("counter_per_faction", 3) then return end
+    local delay = C.rand(C.cfg("counter_delay_min_h", 1), C.cfg("counter_delay_max_h", 4)) * C.HOUR
+    pending[sm.id] = { f = was, due = C.now() + delay }
+end
+local function hook_check_owner()
+    local stw = smart_terrain_warfare
+    if not (stw and stw.check_owner) or stw.__zf_hooked then return end
+    stw.__zf_hooked = true
+    local orig = stw.check_owner
+    stw.check_owner = function(smart, ...)
+        local was = smart and smart.owning_faction
+        local r1, r2 = orig(smart, ...)
+        local owner = smart and smart.owning_faction
+        if was and owner and owner ~= was and C.active() and C.calm() then
+            local ok, err = pcall(on_owner_changed, smart, was, owner)
+            if not ok then C.warn("owner hook: %s", err) end
+        end
+        return r1, r2
+    end
+end
+local function launch_counter(id, f)
+    local sm = alife_object(id)
+    if not (sm and sm.props) or sm.owning_faction == f then return end
+    local gp = C.smart_gpos(sm)
+    if not gp then return end
+    local lo = C.cfg("counter_squads_min", 1)
+    local n = math.random(lo, math.max(lo, C.cfg("counter_squads_max", 3)))
+    local sent = 0
+    for _, sq in ipairs(C.nearest_free(f, gp, C.cfg("counter_radius", 1500), n)) do
+        if C.send(sq, id, 8) then sent = sent + 1 end
+    end
+    C.log("counter launched: %s -> %s with %d squads", f, sm:name(), sent)
+    if sent > 0 then
+        C.report("war", { f, sm.owning_faction }, C.relevant(sm, f, sm.owning_faction), "zf_news_counter", f, "news",
+            C.smart_name(sm), C.faction_name(sm.owning_faction))
+    end
+end
+local function run_counters()
+    local t, pending, n = C.now(), C.store("counter"), 0
+    for id, p in pairs(pending) do
+        if t >= p.due and n < 2 then
+            pending[id] = nil
+            n = n + 1
+            launch_counter(id, p.f)
+        end
+    end
+end
+local function run_raids()
+    if not warfare_utils.is_night() then return end
+    local f = next_faction("raid")
+    if not f or C.cfg_set("raid_never")[f] or not C.ready("raid_" .. f) then return end
+    local chance = C.cfg("raid_chance", 0.25) * (C.cfg_set("raid_bold")[f] and 2 or 1)
+    if math.random() > chance then return end
+    local squads = free_squads(f)
+    if #squads == 0 then return end
+    local r2 = C.cfg("raid_radius", 900) ^ 2
+    local best, bd, raider
+    for _ = 1, math.min(8, #squads) do
+        local sq = squads[math.random(#squads)]
+        local sp = C.gpos(sq)
+        if sp then
+            for _, sm in ipairs(C.smarts()) do
+                local o = sm.owning_faction
+                if C.human(o) and C.enemies(f, o) and not C.is_base(sm) and (sm.defense_count or 0) <= 1 then
+                    local p = C.smart_gpos(sm)
+                    local d = p and C.d2(sp, p)
+                    if d and d <= r2 and (not bd or d < bd) then best, bd, raider = sm, d, sq end
+                end
+            end
+        end
+    end
+    if not best then return end
+    C.cooldown("raid_" .. f, C.cfg("raid_cooldown_h", 16))
+    local sent = C.send(raider, best.id, 6) and 1 or 0
+    if math.random() < 0.5 then
+        for _, sq in ipairs(C.nearest_free(f, C.gpos(raider) or C.smart_gpos(best), 300, 1)) do
+            if C.send(sq, best.id, 6) then sent = sent + 1 end
+        end
+    end
+    C.log("night raid: %s -> %s (%s), %d squads", f, best:name(), best.owning_faction, sent)
+    C.note("war", { f, best.owning_faction }, C.text("zf_j_raid", f, C.faction_name(f), C.smart_name(best),
+        C.faction_name(best.owning_faction)))
+end
+local function pick_assault_target(f, squads)
+    local grudge = C.store("grudge")[f]
+    local vs = grudge and grudge.until_t > C.now() and grudge.vs
+    local r2 = C.cfg("assault_radius", 1500) ^ 2
+    local where = {}
+    for _, sq in ipairs(squads) do where[#where + 1] = C.gpos(sq) end
+    local best, best_score
+    for _, sm in ipairs(C.smarts()) do
+        local o = sm.owning_faction
+        if C.is_base(sm) and C.human(o) and C.enemies(f, o) and not C.protected(sm) then
+            local p = C.smart_gpos(sm)
+            local near
+            for _, sp in ipairs(where) do
+                local d = p and C.d2(sp, p)
+                if d and d <= r2 and (not near or d < near) then near = d end
+            end
+            if near then
+                local scouted = (C.store("scouted")[f .. "|" .. sm.id] or 0) > C.now()
+                local score = math.sqrt(near) + (sm.defense_count or 0) * 400
+                    - (o == vs and 2000 or 0) - (scouted and 1500 or 0)
+                if not best_score or score < best_score then best, best_score = sm, score end
+            end
+        end
+    end
+    return best
+end
+local function run_assaults()
+    local f = next_faction("assault")
+    if not f or not C.ready("assault_" .. f) or math.random() > C.cfg("assault_chance", 0.2) then return end
+    local squads = free_squads(f)
+    if #squads < 1 then return end
+    local target = pick_assault_target(f, squads)
+    if not target then return end
+    local pool = C.nearest_free(f, C.smart_gpos(target), C.cfg("assault_radius", 1500), 8)
+    if zf_tactics.launch(f, target, pool) then
+        C.cooldown("assault_" .. f, C.cfg("assault_cooldown_h", 48))
+    end
+end
+local function faction_of(se)
+    if not se then return end
+    if C.is_player_id(se.id) then return warfare.actor_faction end
+    local ok, c = pcall(function() return se:community() end)
+    return ok and c or nil
+end
+local function break_morale(squad, f, killer)
+    local m = C.store("morale")
+    local size = squad:npc_count()
+    local peak = math.max(m[squad.id] or size, size)
+    m[squad.id] = peak
+    local left = size - 1
+    if (C.store("fanatic")[squad.id] or 0) > C.now() then return end
+    local recon = (C.store("recon")[squad.id] or 0) > C.now()
+    local line = C.cfg("morale_break", 0.4) * zf_garrison.hold_factor(squad)
+    local cmd = zf_classes.squad_command(squad)
+    if cmd == "led" then line = line * C.cfg("cmd_morale_hold", 0.6)
+    elseif cmd == "leaderless" then line = math.min(0.9, line * C.cfg("cmd_leaderless_morale", 1.5)) end
+    if left < 1 or (not recon and (peak < 3 or left / peak > line)) then return end
+    local retreat = C.store("retreat")
+    if (retreat[squad.id] or 0) > C.now() then return end
+    local here = squad.current_target_id and alife_object(squad.current_target_id)
+    if here and C.is_base(here) and here.owning_faction == f and warfare_behavior.holds_ground(f) then
+        return
+    end
+    local gp = C.gpos(squad)
+    local home = gp and C.nearest_own_base(f, gp, here, true)
+    if not home then return end
+    local hours = C.cfg("morale_retreat_h", 6)
+    if C.send(squad, home.id, hours) then
+        retreat[squad.id] = C.now() + hours * C.HOUR
+        m[squad.id] = left
+        C.log("morale broke: %s squad %s falls back to %s", f, squad.id, home:name())
+        local kf = faction_of(killer)
+        if kf and C.enemies(kf, f) then zf_life.pursue(squad, kf, 1) end
+        if squad.online then
+            zf_captive.on_morale_break(squad)
+            C.report("war", f, f == warfare.actor_faction, "zf_news_retreat", f, "news", C.smart_name(home))
+        end
+    end
+end
+local function call_fire(squad, f, killer)
+    local k = killer and level.object_by_id(killer.id)
+    if not (k and zf_artillery.capable(f)) or math.random() > C.cfg("radio_fire_chance", 0.5) then return end
+    for _, m in ipairs(C.members_online(squad)) do
+        if m:position():distance_to(k:position()) < C.cfg("fire_mission_safe", 45) then return end
+    end
+    zf_artillery.fire_mission(f, k:position(), k:game_vertex_id())
+end
+local function call_reinforcements(squad, f, killer)
+    if not squad.online then return end
+    local rf = C.store("reinf")
+    if (rf[squad.id] or 0) > C.now() then return end
+    rf[squad.id] = C.now() + C.cfg("reinforce_cooldown_h", 2) * C.HOUR
+    local rally = squad.current_target_id and alife_object(squad.current_target_id)
+    local gp = C.gpos(squad)
+    if not (rally and rally.props and gp) then return end
+    if zf_tactics.encircled(rally.id, f) then return end
+    local radio = zf_classes.has_radio(squad)
+    if zf_classes.enabled() and not radio and math.random() > C.cfg("runner_chance", 0.5) then return end
+    local want = C.cfg("reinforce_count", 1) + (radio and C.cfg("radio_reinf_bonus", 1) or 0)
+    local radius = C.cfg("reinforce_radius", 350) * (radio and 1.5 or 1)
+    if radio then
+        zf_classes.radio_scene(squad)
+        call_fire(squad, f, killer)
+    end
+    local sent = 0
+    for _, h in ipairs(C.nearest_free(f, gp, radius, want + 1)) do
+        if h.id ~= squad.id and sent < want and C.send(h, rally.id, 3) then
+            sent = sent + 1
+        end
+    end
+    if sent > 0 then
+        C.log("reinforcements: %d %s squads to %s", sent, f, rally:name())
+        C.report("war", f, f == warfare.actor_faction, "zf_news_reinf", f, "news", C.smart_name(rally))
+    end
+end
+local function on_npc_death(squad, npc, killer)
+    if not (squad and squad.registered_with_warfare) then return end
+    local f = squad:get_squad_community()
+    if not C.human(f) then return end
+    zf_classes.on_death(squad, npc, killer)
+    break_morale(squad, f, killer)
+    call_reinforcements(squad, f, killer)
+end
+function on_game_start()
+    hook_check_owner()
+    C.every("zf_counter", 30, run_counters)
+    C.every("zf_raids", 45, run_raids)
+    C.every("zf_assaults", 60, run_assaults)
+    RegisterScriptCallback("squad_on_npc_death", C.guard("zf_ops.npc_death", on_npc_death))
+end

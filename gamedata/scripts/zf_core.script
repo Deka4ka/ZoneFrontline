@@ -1,0 +1,1146 @@
+local SECTION = "zf_frontline"
+HOUR = 3600
+local cfg_cache, set_cache = {}, {}
+function cfg_flush()
+    cfg_cache, set_cache = {}, {}
+end
+local function mcm_value(key)
+    local path, typ = zf_mcm.path(key)
+    local conf = path and axr_main and axr_main.config
+    if not conf then return nil end
+    local ok, v = pcall(conf.r_value, conf, "mcm", path, typ)
+    if ok and v ~= nil then return tostring(v) end
+end
+function cfg(key, default)
+    local v = cfg_cache[key]
+    if v == nil then
+        v = mcm_value(key) or ini_sys:r_string_ex(SECTION, key) or false
+        cfg_cache[key] = v
+    end
+    if v == false then return default end
+    local t = type(default)
+    if t == "number" then return tonumber(v) or default end
+    if t == "boolean" then return v == "true" or v == "1" or v == "on" end
+    return v
+end
+function cfg_set(key, default)
+    local out = set_cache[key]
+    if out then return out end
+    out = {}
+    for _, s in ipairs(str_explode(cfg(key, default or ""), ",")) do
+        if s ~= "" then out[s] = true end
+    end
+    set_cache[key] = out
+    return out
+end
+function rand(a, b)
+    return a + math.random() * (b - a)
+end
+function weighted(t)
+    local total = 0
+    for _, w in pairs(t) do total = total + w end
+    local r = math.random() * total
+    for k, w in pairs(t) do
+        r = r - w
+        if r <= 0 then return k end
+    end
+end
+local function fmt(s, ...)
+    local n, a = select("#", ...), { ... }
+    for i = 1, n do a[i] = tostring(a[i]) end
+    return string.format(s, unpack(a, 1, n))
+end
+function log(s, ...)
+    if cfg("debug", false) then printf("%s", "[ZF] " .. fmt(s, ...)) end
+end
+function info(s, ...)
+    printf("%s", "[ZF] " .. fmt(s, ...))
+end
+function warn(s, ...)
+    printf("%s", "![ZF] " .. fmt(s, ...))
+end
+function active()
+    if not (_G.WARFARE and db.actor and cfg("enabled", true)) then return false end
+    return not (XrrIsHost and not XrrIsHost())
+end
+function now()
+    return game.get_game_time():diffSec(level.get_start_time())
+end
+local state = {}
+function store(name)
+    local t = state[name]
+    if not t then
+        t = {}
+        state[name] = t
+    end
+    return t
+end
+function ready(key)
+    return (store("cd")[key] or 0) <= now()
+end
+function cooldown(key, hours)
+    store("cd")[key] = now() + hours * HOUR
+end
+local fast_until = 0
+local last_rt, last_gt
+local presim_mod
+local function measure_clock()
+    local rt = time_global()
+    if last_rt and rt - last_rt < 500 then return end
+    local gt = now()
+    if last_rt then
+        local rate = (gt - last_gt) * 1000 / (rt - last_rt)
+        if rate > cfg("fast_time_rate", 120) then fast_until = rt + 3000 end
+    end
+    last_rt, last_gt = rt, gt
+end
+function calm()
+    if presim_mod == nil then presim_mod = warfare_presim or false end
+    if presim_mod and presim_mod.is_active and presim_mod.is_active() then return false end
+    return time_global() >= fast_until
+end
+local jobs = {}
+local anywhere = {}
+function every(name, seconds, fn, always)
+    jobs[#jobs + 1] = { name = name, period = seconds * 1000, fn = fn, next = -1, errors = 0, always = always }
+end
+function every_anywhere(name, seconds, fn)
+    anywhere[#anywhere + 1] = { name = name, period = seconds * 1000, fn = fn, next = -1, errors = 0, always = true }
+end
+function guard(name, fn, always)
+    return function(...)
+        if not active() or not (always or calm()) then return end
+        local ok, err = pcall(fn, ...)
+        if not ok then warn("%s: %s", name, err) end
+    end
+end
+function war_factions()
+    local out = {}
+    for _, f in ipairs(game_relations.factions_table) do
+        if warfare.registered_squads[f] then out[#out + 1] = f end
+    end
+    return out
+end
+function human(f)
+    return f ~= nil and f ~= "monster" and f ~= "zombied" and f ~= "none"
+        and warfare.registered_squads[f] ~= nil
+end
+function enemies(a, b)
+    return a ~= nil and b ~= nil and a ~= b and game_relations.is_factions_enemies(a, b) == true
+end
+function friends(a, b)
+    return a == b or game_relations.is_factions_friends(a, b) == true
+end
+function faction_name(f)
+    return game.translate_string(f)
+end
+function community(obj)
+    if obj:id() == AC_ID then return warfare.actor_faction end
+    local c = character_community(obj)
+    return c and c:gsub("^actor_", "")
+end
+function level_of(se)
+    return game_graph():vertex(se.m_game_vertex_id):level_id()
+end
+local smart_lid = {}
+function smart_level(sm)
+    local l = smart_lid[sm.id]
+    if not l then
+        l = level_of(sm)
+        smart_lid[sm.id] = l
+    end
+    return l
+end
+function player_level(obj)
+    return game_graph():vertex(obj:game_vertex_id()):level_id()
+end
+function gpos(se)
+    local ok, p = pcall(global_position.from, se)
+    return ok and p or nil
+end
+function smart_gpos(sm)
+    return sm.global_position or gpos(sm)
+end
+function d2(a, b)
+    return warfare.distance_to_xz_sqr(a, b)
+end
+local smart_cache, smart_cache_t = nil, -1
+function smarts()
+    local t = time_global()
+    if smart_cache and t - smart_cache_t < 5000 then return smart_cache end
+    local out = {}
+    for _, s in pairs(SIMBOARD.smarts) do
+        local sm = s.smrt
+        if sm and sm.props then out[#out + 1] = sm end
+    end
+    smart_cache, smart_cache_t = out, t
+    return out
+end
+local level_cache, level_cache_t = {}, -1
+function smarts_on_level(lid)
+    local t = time_global()
+    if t - level_cache_t >= 5000 then level_cache, level_cache_t = {}, t end
+    local list = level_cache[lid]
+    if not list then
+        list = {}
+        for _, s in pairs(SIMBOARD.smarts) do
+            local sm = s.smrt
+            if sm and smart_level(sm) == lid then list[#list + 1] = sm end
+        end
+        level_cache[lid] = list
+    end
+    return list
+end
+function is_base(sm)
+    return sm.props ~= nil and (sm.props.base or 0) > 0
+end
+function protected(sm)
+    return warfare_options.options.prevent_mainbase_attacks
+        and smart_terrain_warfare.get_protected_base_faction(sm:name()) ~= nil
+end
+function smart_name(sm)
+    return smart_terrain_warfare.translate_smart_name(sm:name()) or sm:name()
+end
+function neighbours(sm, radius, filter)
+    local p, r2, list = smart_gpos(sm), radius * radius, {}
+    if not p then return list end
+    for _, o in ipairs(smarts()) do
+        if o.id ~= sm.id and (not filter or filter(o)) then
+            local q = smart_gpos(o)
+            local d = q and d2(p, q)
+            if d and d <= r2 then list[#list + 1] = { sm = o, d = d } end
+        end
+    end
+    table.sort(list, function(a, b) return a.d < b.d end)
+    local out = {}
+    for i, e in ipairs(list) do out[i] = e.sm end
+    return out
+end
+local function crowd(sm)
+    local n = 0
+    for _ in pairs(sm.npc_info or {}) do n = n + 1 end
+    for _ in pairs(sm.arriving_npc or {}) do n = n + 1 end
+    return n
+end
+local BASE_FULL = 60
+function nearest_own_base(f, gp, except, roomy)
+    local best, bd
+    for _, sm in ipairs(smarts()) do
+        if is_base(sm) and sm.owning_faction == f and not (except and sm.id == except.id)
+           and not (roomy and crowd(sm) >= BASE_FULL) then
+            local p = smart_gpos(sm)
+            local d = p and d2(gp, p)
+            if d and (not bd or d < bd) then best, bd = sm, d end
+        end
+    end
+    return best
+end
+function squads_of(f)
+    local out = {}
+    for id in pairs(warfare.registered_squads[f] or {}) do
+        local sq = alife_object(id)
+        if sq and sq:clsid() == clsid.online_offline_group_s and sq:npc_count() > 0 then
+            out[#out + 1] = sq
+        end
+    end
+    return out
+end
+local garrison_cache, garrison_t = {}, -1
+local function garrison(f)
+    local t = time_global()
+    if t ~= garrison_t then garrison_cache, garrison_t = {}, t end
+    local g = garrison_cache[f]
+    if not g then
+        g = {}
+        for id, target in pairs(warfare.registered_squads[f] or {}) do
+            local sq = alife_object(id)
+            local at = sq and sq.current_target_id
+            if at and not axr_companions.companion_squads[id] then g[at] = (g[at] or 0) + 1 end
+        end
+        garrison_cache[f] = g
+    end
+    return g
+end
+function squads_at(f, id)
+    return garrison(f)[id] or 0
+end
+function free(sq)
+    if axr_companions.companion_squads[sq.id] then return false end
+    if warfare_squad_command and warfare_squad_command.is_controlled(sq.id) then return false end
+    if sq.stay_time or (sim_offline_combat.opponents and sim_offline_combat.opponents[sq.id]) then return false end
+    if (store("busy")[sq.id] or 0) > now() or store("posted")[sq.id] then return false end
+    local at = sq.current_target_id
+    local home = at and alife_object(at)
+    local f = sq:get_squad_community()
+    if home and is_base(home) and home.owning_faction == f and (garrison(f)[at] or 0) <= 1 then
+        return false
+    end
+    return true
+end
+local sending = false
+function own_order()
+    return sending
+end
+function send(sq, target_id, busy_hours)
+    sending = true
+    local ok, err = pcall(sim_squad_warfare.set_target, sq, target_id)
+    sending = false
+    if not ok then
+        warn("send %s -> %s: %s", sq.id, target_id, err)
+        return false
+    end
+    if sq.assigned_target_id ~= target_id then return false end
+    store("busy")[sq.id] = now() + (busy_hours or 6) * HOUR
+    return true
+end
+function nearest_free(f, gp, radius, n)
+    local r2, list = radius * radius, {}
+    for _, sq in ipairs(squads_of(f)) do
+        if free(sq) then
+            local p = gpos(sq)
+            local d = p and d2(p, gp)
+            if d and d <= r2 then list[#list + 1] = { sq = sq, d = d } end
+        end
+    end
+    table.sort(list, function(a, b) return a.d < b.d end)
+    local out = {}
+    for i = 1, math.min(n, #list) do out[i] = list[i].sq end
+    return out
+end
+function send_home(sq, hours)
+    local f, gp = sq:get_squad_community(), gpos(sq)
+    local home = gp and nearest_own_base(f, gp, nil, true)
+    return home and send(sq, home.id, hours or 4)
+end
+function garrison_of(f)
+    return garrison(f)
+end
+function live_squad(id)
+    local sq = id and alife_object(id)
+    return sq and sq:clsid() == clsid.online_offline_group_s and sq:npc_count() > 0 and sq or nil
+end
+function squad_of(obj)
+    local se = obj
+    if type(obj) == "number" then se = alife_object(obj) end
+    local g = se and se.group_id
+    return g and g ~= 65535 and live_squad(g) or nil
+end
+function members_online(sq)
+    local out = {}
+    for m in sq:squad_members() do
+        local npc = level.object_by_id(m.id)
+        if npc and npc:alive() then out[#out + 1] = npc end
+    end
+    return out
+end
+function hostile(a, b)
+    if a and b and a:id() ~= b:id() and a:relation(b) ~= game_object.enemy then
+        pcall(a.set_relation, a, game_object.enemy, b)
+    end
+end
+function forgive(a, b)
+    if a and b then pcall(a.force_set_goodwill, a, 0, b) end
+end
+function feud(a, b, hours)
+    if not (a and b) then return end
+    store("feuds")[a .. ">" .. b] = now() + (hours or 3) * HOUR
+    if tonumber(b) then
+        shield_allow(a, b)
+        shield_allow(b, a)
+    end
+end
+function spare(id, hours)
+    if id then store("spared")[id] = now() + (hours or 3) * HOUR end
+end
+local spared_men = {}
+local function at_feud(a, b)
+    local fs = store("feuds")
+    return fs[a .. ">" .. b] ~= nil or fs[b .. ">" .. a] ~= nil
+end
+local function players_men(id)
+    if is_player_id(id) then return true end
+    local sq = squad_of(id)
+    return sq ~= nil and axr_companions.companion_squads[sq.id] ~= nil
+end
+local function spare_eval(obj, enemy, flags)
+    if flags.override or next(spared_men) == nil then return end
+    local a, b = obj:id(), enemy:id()
+    local qa, qb = spared_men[a], spared_men[b]
+    if not (qa or qb) then return end
+    if players_men(a) or players_men(b) then
+        if not store("provoked")[qa or qb] then flags.override, flags.result = true, false end
+        return
+    end
+    if not (IsStalker(obj) and IsStalker(enemy)) then return end
+    qa = qa or (squad_of(a) or {}).id
+    qb = qb or (squad_of(b) or {}).id
+    if qa and qb and (qa == qb or at_feud(qa, qb)) then return end
+    flags.override, flags.result = true, false
+end
+local function spare_hit(npc, amount, dir, who)
+    local q = npc and spared_men[npc:id()]
+    if q and who and players_men(who:id()) then store("provoked")[q] = true end
+end
+local function settle_spared()
+    local sp, t, men = store("spared"), now(), {}
+    for id, until_t in pairs(sp) do
+        local sq = live_squad(id)
+        if not sq or t > until_t then
+            sp[id] = nil
+            store("provoked")[id] = nil
+        else
+            for m in sq:squad_members() do men[m.id] = id end
+        end
+    end
+    spared_men = men
+end
+local function settle_feuds()
+    settle_spared()
+    local fs, t = store("feuds"), now()
+    for key, until_t in pairs(fs) do
+        local a, b = key:match("^(%d+)>(.+)$")
+        local sa = a and live_squad(tonumber(a))
+        local sb = tonumber(b) and live_squad(tonumber(b))
+        if not sa or t > until_t or (tonumber(b) and not sb) then
+            fs[key] = nil
+        else
+            local f = sa:get_squad_community()
+            for _, m in ipairs(members_online(sa)) do
+                if sb then
+                    for _, o in ipairs(members_online(sb)) do
+                        hostile(m, o)
+                        hostile(o, m)
+                    end
+                else
+                    for _, p in ipairs(players()) do hostile(m, p) end
+                    if b == "all" then
+                        local pos = m:position()
+                        for _, id in pairs(db.OnlineStalkers) do
+                            local o = level.object_by_id(id)
+                            if o and o:alive() and character_community(o) ~= f and o:position():distance_to(pos) < 200 then
+                                hostile(m, o)
+                                hostile(o, m)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+local function mul32(a, b)
+    local lo, hi = a % 65536, math.floor(a / 65536)
+    return (lo * b + (hi * b % 65536) * 65536) % 4294967296
+end
+local function mix(x)
+    x = bit.bxor(x, bit.rshift(x, 16)) % 4294967296
+    x = mul32(x, 0x7feb352d)
+    x = bit.bxor(x, bit.rshift(x, 15)) % 4294967296
+    x = mul32(x, 0x846ca68b)
+    return bit.bxor(x, bit.rshift(x, 16)) % 4294967296
+end
+function hash(n, salt)
+    return mix((n + (salt or 0) * 65599) % 4294967296) / 4294967296
+end
+local RANK_LEVEL = { novice = 1, trainee = 2, experienced = 3, professional = 4, veteran = 5,
+    expert = 6, master = 7, legend = 8 }
+function rank_level(obj)
+    local by = type(obj.id) == "function" and ranks.get_obj_rank_name or ranks.get_se_obj_rank_name
+    local ok, name = pcall(by, obj)
+    return ok and RANK_LEVEL[name] or 2
+end
+function name_of(id)
+    local se = id and alife_object(id)
+    local ok, n = pcall(function() return se:character_name() end)
+    return ok and n or game.translate_string("zf_someone")
+end
+function give(obj, section, n)
+    if not ini_sys:section_exist(section) then return 0 end
+    for _ = 1, n or 1 do alife_create_item(section, obj) end
+    return n or 1
+end
+function players()
+    local out = {}
+    if db.actor and db.actor:alive() then out[1] = db.actor end
+    if XrrIsHosted and XrrIsHosted() then
+        local xp = XrrPlayers()
+        for i = 1, xp:GetPeerCount() do
+            local id = xp:GetPeerLocalIdAt(i)
+            local obj = id and id > 0 and id < 65535 and level.object_by_id(id)
+            if obj and obj:alive() then out[#out + 1] = obj end
+        end
+    end
+    return out
+end
+function player_by_key(key)
+    if key == "host" or not key then return db.actor end
+    local xp = XrrPlayers and XrrPlayers()
+    if not xp then return end
+    for _, p in ipairs(players()) do
+        if p:id() ~= AC_ID and tostring(xp:PlayerDummyPeerNetid(p:id())) == key then return p end
+    end
+end
+function player_key(p)
+    if not p or p:id() == AC_ID then return "host" end
+    local xp = XrrPlayers and XrrPlayers()
+    return xp and tostring(xp:PlayerDummyPeerNetid(p:id())) or "host"
+end
+function peer_key(conn)
+    if not conn then return "host" end
+    local ok, pid = pcall(function() return XrrPlayers():GetPeerLocalIdByConn(conn) end)
+    local p = ok and pid and pid > 0 and level.object_by_id(pid)
+    return p and player_key(p) or "host"
+end
+function nearest_player(pos, lid)
+    local best, bd
+    for _, p in ipairs(players()) do
+        if player_level(p) == lid then
+            local d = p:position():distance_to(pos)
+            if not bd or d < bd then best, bd = p, d end
+        end
+    end
+    return best, bd
+end
+function is_player_id(id)
+    return id == AC_ID or (id ~= nil and XrrPlayers ~= nil and XrrPlayers():IsPlayerDummy(id)) == true
+end
+function is_player(obj)
+    return obj ~= nil and is_player_id(obj:id())
+end
+local online_monsters = {}
+local function monster_spawned(obj) online_monsters[obj:id()] = true end
+local function monster_gone(obj) online_monsters[obj:id()] = nil end
+function online_count()
+    local n = #db.OnlineStalkers
+    for _ in pairs(online_monsters) do n = n + 1 end
+    return n
+end
+function monsters_online()
+    local out = {}
+    for id in pairs(online_monsters) do
+        local o = level.object_by_id(id)
+        if o and o:alive() then out[#out + 1] = o end
+    end
+    return out
+end
+function crowded()
+    return online_count() >= cfg("online_budget", 50)
+end
+local pop_count, pop_t = {}, -1
+local function faction_squads(f)
+    local t = time_global()
+    if t ~= pop_t then pop_count, pop_t = {}, t end
+    local n = pop_count[f]
+    if not n then
+        n = #squads_of(f)
+        pop_count[f] = n
+    end
+    return n
+end
+function at_cap(f)
+    local cap = cfg("pop_cap", 30)
+    return cap > 0 and f ~= nil and warfare.registered_squads[f] ~= nil and faction_squads(f) >= cap
+end
+local function guard_population()
+    local stw = smart_terrain_warfare
+    if not stw or _G.zf_population_guarded then return end
+    _G.zf_population_guarded = true
+    for _, name in ipairs({ "spawn_defense", "spawn_patrols" }) do
+        local orig = stw[name]
+        if orig then
+            stw[name] = function(smart, ...)
+                local f = smart and smart.owning_faction
+                if active() and at_cap(f) then return end
+                local r = orig(smart, ...)
+                if f then pop_count[f] = nil end
+                return r
+            end
+        end
+    end
+    for _, name in ipairs({ "get_current_def_respawn_interval", "get_current_patrol_respawn_interval" }) do
+        local orig = stw[name]
+        if orig then
+            stw[name] = function(...)
+                local v = orig(...)
+                local cap = cfg("respawn_max_min", 45) * 10
+                if active() and cap > 0 and type(v) == "number" and v > cap then return cap end
+                return v
+            end
+        end
+    end
+end
+function relevant(sm, a, b)
+    local af = warfare.actor_faction
+    if a == af or b == af or cfg("news_all_levels", false) then return true end
+    local lid = smart_level(sm)
+    for _, p in ipairs(players()) do
+        if player_level(p) == lid then return true end
+    end
+    return false
+end
+local has_text, nvar = {}, {}
+local function exists(id)
+    local v = has_text[id]
+    if v == nil then
+        v = game.translate_string(id) ~= id
+        has_text[id] = v
+    end
+    return v
+end
+local function variant(base)
+    local n = nvar[base]
+    if n == nil then
+        n = 0
+        while exists(base .. "_" .. (n + 1)) do n = n + 1 end
+        nvar[base] = n
+    end
+    if n > 0 then return base .. "_" .. math.random(n) end
+    return exists(base) and base or nil
+end
+function text(key, faction, ...)
+    local id = faction and variant(key .. "_" .. faction) or variant(key) or key
+    return fmt(game.translate_string(id), ...)
+end
+local JOURNAL_MAX = 300
+local function stamp()
+    local _, M, D, h, m = game.get_game_time():get(0, 0, 0, 0, 0, 0, 0)
+    return string.format("%02d.%02d %02d:%02d", D, M, h, m)
+end
+function note(cat, fs, txt, speaker, who)
+    local parts, list = {}, type(fs) == "table" and fs or { fs }
+    for i = 1, table.maxn(list) do
+        if list[i] then parts[#parts + 1] = list[i] end
+    end
+    local j, t = store("journal"), now()
+    for i = #j, math.max(1, #j - 5), -1 do
+        if j[i].x == txt and t - (j[i].t or 0) < HOUR then return txt end
+    end
+    j[#j + 1] = { d = stamp(), t = t, c = cat, f = table.concat(parts, ","), s = speaker, n = who, x = txt }
+    if #j > JOURNAL_MAX then table.remove(j, 1) end
+    return txt
+end
+local function tip(txt, faction, sound, header)
+    header = header or (faction and faction_name(faction)) or game.translate_string("zf_hdr_intercept")
+    dynamic_news_helper.send_tip(txt, header, nil, 10, faction or "default", sound or "news")
+end
+function report(cat, fs, show, key, faction, sound, ...)
+    local txt = text(key, faction, ...)
+    note(cat, fs, txt, faction or "@")
+    if show then tip(txt, faction, sound) end
+    log("%s %s: %s", cat, key, txt)
+    return txt
+end
+function news(key, faction, sound, ...)
+    local txt = text(key, faction, ...)
+    tip(txt, faction, sound)
+    log("news %s: %s", key, txt)
+end
+function say(name, faction, key, sound, ...)
+    local txt = text(key, faction, ...)
+    tip(txt, faction, sound, name)
+    note("people", faction, txt, faction, name)
+    log("say %s %s: %s", name, key, txt)
+end
+function local_news(key, faction, sound, ...)
+    local net = XrrNet and XrrNet()
+    if net then net:SetNewsBroadcast(false) end
+    local ok, err = pcall(news, key, faction, sound, ...)
+    if net then net:SetNewsBroadcast(true) end
+    if not ok then warn("local_news: %s", err) end
+end
+local REWARD_KIND = 202
+function reward(player, amount, key, why)
+    amount = math.floor(amount)
+    if amount <= 0 then return end
+    if player:id() == AC_ID then
+        if why then local_news(why, nil, "news") end
+        db.actor:give_money(amount)
+        local_news(key, nil, "news", amount)
+        return
+    end
+    local xp = XrrPlayers and XrrPlayers()
+    local netid = xp and xp:PlayerDummyPeerNetid(player:id())
+    if netid and netid ~= "0" then
+        xp:SendPeerScreenMsg(netid, REWARD_KIND, key .. "|" .. amount .. (why and ("|" .. why) or ""))
+    end
+end
+function peer()
+    return XrrIsHost ~= nil and not XrrIsHost()
+end
+local peer_msg = {}
+function on_peer_msg(kind, fn)
+    peer_msg[kind] = fn
+end
+function to_peer(netid, kind, arg)
+    local xp = XrrPlayers and XrrPlayers()
+    if xp and netid and netid ~= "0" and netid ~= 0 then xp:SendPeerScreenMsg(netid, kind, arg) end
+end
+function peer_message(kind, arg)
+    local fn = peer_msg[kind]
+    if not fn then return false end
+    local ok, err = pcall(fn, arg)
+    if not ok then warn("peer message %s: %s", kind, err) end
+    return true
+end
+local function hook_peer_msgs()
+    if not (XrrNet and xrr_net_client) then return end
+    local orig = _G.OnPeerScreenMsg
+    _G.OnPeerScreenMsg = function(kind, arg)
+        if not peer_message(kind, arg) then return orig(kind, arg) end
+    end
+end
+on_peer_msg(REWARD_KIND, function(arg)
+    local key, amount, why = tostring(arg):match("^([%w_]+)|(%d+)|?([%w_]*)$")
+    amount = tonumber(amount)
+    if db.actor and amount and amount > 0 then
+        if why ~= "" then local_news(why, nil, "news") end
+        db.actor:give_money(amount)
+        local_news(key, nil, "news", amount)
+    end
+end)
+function peer_order(key)
+    local host_id = xrr_pending_npc_lock_host_id and xrr_pending_npc_lock_host_id()
+    if not (host_id and host_id > 0 and host_id < 65535) then return false end
+    XrrAlife():SendQuestAccept(key, host_id)
+    return true
+end
+local peer_orders = {}
+local peer_keys = {}
+local heard = {}
+local function first_time(k, npc_host_id)
+    local id, t = k .. "#" .. tostring(npc_host_id) .. "#" .. tostring(_G.xrr_quest_accept_conn), time_global()
+    for key, until_t in pairs(heard) do
+        if until_t <= t then heard[key] = nil end
+    end
+    if heard[id] then return false end
+    heard[id] = t + 3000
+    return true
+end
+local function install_orders()
+    _G.xrr_story_quest_handlers = _G.xrr_story_quest_handlers or {}
+    local h = _G.xrr_story_quest_handlers
+    for k, fn in pairs(peer_keys) do
+        if rawget(h, k) ~= fn then rawset(h, k, fn) end
+    end
+    if next(peer_orders) == nil then return end
+    local mt = getmetatable(h) or {}
+    if mt.__zf_orders then return end
+    local prev = mt.__index
+    mt.__zf_orders = true
+    mt.__index = function(t, k)
+        local p, rest
+        if type(k) == "string" then p, rest = k:match("^([^|]+)|(.*)$") end
+        local fn = p and peer_orders[p]
+        if fn then
+            return function(npc_host_id)
+                if peer() or not first_time(k, npc_host_id) then return end
+                local npc = npc_host_id and level.object_by_id(npc_host_id)
+                local ok, err = pcall(fn, rest, npc, peer_key(_G.xrr_quest_accept_conn))
+                if not ok then warn("peer order %s: %s", k, err) end
+            end
+        end
+        if type(prev) == "function" then return prev(t, k) end
+        return prev and prev[k]
+    end
+    setmetatable(h, mt)
+end
+function on_peer_order(prefix, fn)
+    peer_orders[prefix] = fn
+    install_orders()
+end
+function on_peer_key(key, fn)
+    peer_keys[key] = function(npc_host_id)
+        if peer() or not first_time(key, npc_host_id) then return end
+        local npc = npc_host_id and level.object_by_id(npc_host_id)
+        local ok, err = pcall(fn, npc, peer_key(_G.xrr_quest_accept_conn))
+        if not ok then warn("peer order %s: %s", key, err) end
+    end
+    install_orders()
+end
+function on_peer_intent(verb, fn)
+    if not (XrrNet and xrr_use_intent and xrr_use_intent.register) then return end
+    xrr_use_intent.register(verb, function(_, _, args, netid)
+        local ok, err = pcall(fn, args or "", netid)
+        if not ok then warn("peer intent %s: %s", verb, err) end
+    end)
+end
+function peer_intent(verb, args)
+    if XrrWorld then XrrWorld():SendUseIntent(verb, 0, 0, args or "") end
+end
+function shield(sq, hours, mode, allow)
+    if not (sq and shields_on()) then return end
+    local a
+    for _, id in ipairs(allow or {}) do
+        a = a or {}
+        a[id] = true
+    end
+    store("shield")[sq.id] = { sec = sq:section_name(), m = mode or "seen", u = now() + (hours or 6) * HOUR, a = a }
+end
+function shields_on()
+    return cfg("shield_enabled", true)
+end
+function unshield(id)
+    store("shield")[id] = nil
+end
+function shield_allow(id, foe)
+    local s = store("shield")[id]
+    if s then
+        s.a = s.a or {}
+        s.a[foe] = true
+    end
+end
+function shield_of(id)
+    local s = id and store("shield")[id]
+    if not s then return end
+    local sq = alife_object(id)
+    if not (sq and sq:clsid() == clsid.online_offline_group_s and sq:section_name() == s.sec) or now() > s.u
+        or not shields_on() then
+        store("shield")[id] = nil
+        return
+    end
+    return s
+end
+local function player_within(pos, lid, r)
+    for _, p in ipairs(players()) do
+        if player_level(p) == lid and p:position():distance_to(pos) < r then return true end
+    end
+    return false
+end
+local function players_side(who)
+    if not who then return false end
+    if is_player(who) then return true end
+    local sq = squad_of(who:id())
+    return sq ~= nil and axr_companions.companion_squads[sq.id] ~= nil
+end
+local function shielded_hit(obj, shit)
+    if not (shit and shit.power and active()) then return end
+    local sq = squad_of(obj:id())
+    local s = sq and shield_of(sq.id)
+    if not s or players_side(shit.draftsman) then return end
+    if s.m == "watch" and player_within(obj:position(), player_level(obj), cfg("shield_watch_dist", 120)) then return end
+    if s.a and shit.draftsman then
+        local wsq = squad_of(shit.draftsman:id())
+        if wsq and s.a[wsq.id] then return end
+    end
+    shit.power = shit.power * cfg("shield_hit", 0.25)
+end
+local function look()
+    if not shields_on() then return end
+    local r, far = cfg("shield_seen_dist", 70), cfg("shield_look_dist", 250)
+    for id, s in pairs(store("shield")) do
+        local sq = s.m == "seen" and shield_of(id) and alife_object(id)
+        if sq and sq.online then
+            for _, npc in ipairs(members_online(sq)) do
+                local lid, pos = player_level(npc), npc:position()
+                local seen = player_within(pos, lid, r)
+                if not seen and db.actor and player_level(db.actor) == lid
+                    and db.actor:position():distance_to(pos) < far then
+                    local ok, v = pcall(db.actor.see, db.actor, npc)
+                    seen = ok and v == true
+                end
+                if seen then
+                    unshield(id)
+                    log("shield of squad %s off: a player saw them", id)
+                    break
+                end
+            end
+        end
+    end
+end
+local function guard_change_team()
+    local orig = _G.change_team_squad_group
+    if not orig or _G.zf_change_team_guarded then return end
+    _G.zf_change_team_guarded = true
+    _G.change_team_squad_group = function(se_obj, team, squad, group)
+        local st = se_obj and db.storage[se_obj.id]
+        if st and st.object and not st.object:alive() then return end
+        return orig(se_obj, team, squad, group)
+    end
+end
+local function guard_offline_combat()
+    local soc = sim_offline_combat
+    if not (soc and soc.validate_enemy) or soc.__zf_guarded then return end
+    soc.__zf_guarded = true
+    local orig = soc.validate_enemy
+    soc.validate_enemy = function(sim, lid, squad_1, id_1, id_2, ...)
+        local o = id_2 and (sim or alife()):object(id_2)
+        if o and o:clsid() ~= clsid.online_offline_group_s then
+            local opp = soc.opponents
+            if opp then
+                opp[id_2] = nil
+                if opp[id_1] == id_2 then opp[id_1] = nil end
+            end
+            local lvl = soc.squads_by_level and lid and soc.squads_by_level[lid]
+            if lvl then lvl[id_2] = nil end
+            return false
+        end
+        local s1, s2 = shield_of(id_1), shield_of(id_2)
+        if (s1 and not (s1.a and s1.a[id_2])) or (s2 and not (s2.a and s2.a[id_1])) then return false end
+        return orig(sim, lid, squad_1, id_1, id_2, ...)
+    end
+end
+local function guard_corpse_loot()
+    local cd = xr_corpse_detection
+    if not (cd and cd.get_all_from_corpse) or cd.__zf_guarded then return end
+    cd.__zf_guarded = true
+    local orig = cd.get_all_from_corpse
+    cd.get_all_from_corpse = function(npc)
+        local st = npc and db.storage[npc:id()]
+        st = st and st.corpse_detection
+        local id = st and st.selected_corpse_id
+        local se = id and alife_object(id)
+        if id and not (se and se.online) then st.selected_corpse_id = nil end
+        return orig(npc)
+    end
+end
+local function guard_camper()
+    local cls = xr_camper and xr_camper.action_patrol
+    if not (cls and cls.reset_scheme) or _G.zf_camper_guarded then return end
+    _G.zf_camper_guarded = true
+    local orig = cls.reset_scheme
+    cls.reset_scheme = function(self, ...)
+        if not self.move_mgr then
+            local st = self.object and db.storage[self.object:id()]
+            self.move_mgr = st and st.move_mgr
+            if not self.move_mgr then return end
+        end
+        return orig(self, ...)
+    end
+end
+local SMART_SAVE_MAX = 250
+local function trim_smart(smart)
+    local n = 0
+    for _ in pairs(smart.npc_info) do n = n + 1 end
+    if n <= SMART_SAVE_MAX then return end
+    local ghosts, extra = 0, 0
+    for id in pairs(smart.npc_info) do
+        local se = alife_object(id)
+        if not (se and se.m_smart_terrain_id == smart.id and se:alive()) then
+            smart:clear_job(id, true)
+            ghosts, n = ghosts + 1, n - 1
+        end
+    end
+    for id in pairs(smart.npc_info) do
+        if n <= SMART_SAVE_MAX then break end
+        local se = alife_object(id)
+        if se then smart:unregister_npc(se) else smart:clear_job(id, true) end
+        extra, n = extra + 1, n - 1
+    end
+    warn("smart %s held too many NPCs for the save: %d gone or elsewhere, %d let go", smart:name(), ghosts, extra)
+end
+local function guard_smart_saves()
+    local cls = smart_terrain and smart_terrain.se_smart_terrain
+    if not cls or _G.zf_smart_saves_guarded then return end
+    _G.zf_smart_saves_guarded = true
+    local orig = cls.STATE_Write
+    cls.STATE_Write = function(self, packet)
+        local ok, err = pcall(trim_smart, self)
+        if not ok then warn("smart save guard: %s", err) end
+        return orig(self, packet)
+    end
+end
+function creature(id)
+    local se = id and alife_object(id)
+    if se and (IsStalker(se) or IsMonster(se)) and se:alive() then return se end
+end
+LOGIC_FILE = "scripts\\zf_logic.ltx"
+local worn = {}
+local rewear = {}
+local acting = {}
+function set_logic(npc, section)
+    local id = npc:id()
+    if not (db.storage[id] and npc:alive()) then return false end
+    acting[id] = nil
+    local se = alife_object(id)
+    local sid = se and se.m_smart_terrain_id
+    local smart = sid and sid ~= 65535 and alife_object(sid)
+    if smart then smart:unregister_npc(se) end
+    local ini = ini_file(LOGIC_FILE)
+    xr_logic.configure_schemes(npc, ini, LOGIC_FILE, modules.stype_stalker, "logic", "")
+    xr_logic.activate_by_section(npc, ini, section, "", false)
+    worn[id] = section
+    return true
+end
+function restore_logic(npc)
+    local id = npc:id()
+    worn[id], rewear[id] = nil, nil
+    if not npc:alive() then return end
+    local se = alife_object(id)
+    local sq = se and se.group_id and se.group_id ~= 65535 and alife_object(se.group_id)
+    local smart = sq and alife_object(sq.smart_id or sq.current_target_id)
+    if smart and smart:clsid() == clsid.smart_terrain and se.m_smart_terrain_id == 65535 then
+        smart:register_npc(se)
+    end
+    xr_logic.restore_scheme_and_logic(npc)
+end
+function wears(id)
+    return worn[id]
+end
+function can_act(npc)
+    local id = npc:id()
+    if worn[id] or not db.storage[id] or not npc:alive() or npc:best_enemy() then return false end
+    if get_object_story_id(id) or npc:has_info("npcx_is_companion") or is_player(npc) then return false end
+    return not xr_wounded.is_wounded(npc)
+end
+function act(npc, section, seconds)
+    if not can_act(npc) or not set_logic(npc, section) then return false end
+    acting[npc:id()] = time_global() + seconds * 1000
+    return true
+end
+local function end_acts()
+    local t = time_global()
+    for id, until_t in pairs(acting) do
+        if t >= until_t then
+            acting[id] = nil
+            local npc = level.object_by_id(id)
+            if npc and npc:alive() and worn[id] then restore_logic(npc) else worn[id] = nil end
+        end
+    end
+end
+function face(npc, state, obj)
+    pcall(state_mgr.set_state, npc, state, nil, nil, { look_object = obj })
+end
+function ensure_logic(npc, section)
+    local st = db.storage[npc:id()]
+    if not (st and st.ini_filename == LOGIC_FILE and st.active_section and st.active_section:find("^remark@zf_")) then
+        return set_logic(npc, section)
+    end
+    return true
+end
+local function strip_logic_for_save()
+    for id, section in pairs(worn) do
+        local npc = level.object_by_id(id)
+        if npc and npc:alive() then
+            restore_logic(npc)
+            rewear[id] = section
+            local binder = npc:binded_object()
+            if binder and binder.save_state then binder:save_state(alife_storage_manager.get_state()) end
+        else
+            worn[id] = nil
+        end
+    end
+end
+local function rewear_logic()
+    for id, section in pairs(rewear) do
+        rewear[id] = nil
+        local npc = level.object_by_id(id)
+        if npc and npc:alive() then set_logic(npc, section) end
+    end
+end
+local function on_net_spawn(npc)
+    local st = npc and db.storage[npc:id()]
+    if st and st.loaded_ini_filename == LOGIC_FILE then
+        st.loaded_ini_filename, st.loaded_active_section, st.loaded_section_logic = nil, nil, nil
+    end
+end
+local function sweep_logic()
+    for _, id in pairs(db.OnlineStalkers) do
+        local st = db.storage[id]
+        if st and st.ini_filename == LOGIC_FILE and not worn[id] then
+            local npc = level.object_by_id(id)
+            if npc and npc:alive() then restore_logic(npc) end
+        end
+    end
+end
+local was_quiet = false
+local peer_flush = 0
+local function run_jobs(list, t, quiet)
+    for i = 1, #list do
+        local j = list[i]
+        if j.next < 0 then
+            j.next = t + math.random(j.period)
+        elseif t >= j.next and (j.always or not quiet) then
+            j.next = t + j.period
+            local ok, err = pcall(j.fn)
+            if ok then
+                j.errors = 0
+            else
+                j.errors = j.errors + 1
+                if j.errors >= 10 then
+                    j.errors, j.next = 0, t + 300000
+                    warn("%s: %s (paused for 5 minutes after 10 errors in a row)", j.name, err)
+                else
+                    warn("%s: %s", j.name, err)
+                end
+            end
+        end
+    end
+end
+local function tick()
+    if db.actor then run_jobs(anywhere, time_global(), false) end
+    if not active() then
+        local t = time_global()
+        if t >= peer_flush then
+            peer_flush = t + 10000
+            cfg_flush()
+        end
+        return
+    end
+    measure_clock()
+    rewear_logic()
+    local t, quiet = time_global(), not calm()
+    if was_quiet and not quiet then
+        for i = 1, #jobs do
+            local j = jobs[i]
+            if not j.always then j.next = t + math.random(j.period) end
+        end
+    end
+    was_quiet = quiet
+    run_jobs(jobs, t, quiet)
+end
+local function save_state(m_data)
+    local ok, err = pcall(strip_logic_for_save)
+    if not ok then warn("strip logic for save: %s", err) end
+    if active() then m_data.zone_frontline = state end
+end
+local function load_state(m_data)
+    state = m_data.zone_frontline or {}
+end
+local function on_level_changing()
+    pcall(strip_logic_for_save)
+end
+local function cleanup()
+    local t = now()
+    for _, name in ipairs({ "busy", "reinf", "retreat", "morale", "fanatic", "recon", "leaderless", "no_radio" }) do
+        local m = store(name)
+        for id, v in pairs(m) do
+            if not alife_object(id) or (name ~= "morale" and v < t) then m[id] = nil end
+        end
+    end
+    local scouted = store("scouted")
+    for key, until_t in pairs(scouted) do
+        if until_t < t then scouted[key] = nil end
+    end
+    local encircled = store("encircled")
+    for id, e in pairs(encircled) do
+        if e.until_t < t then encircled[id] = nil end
+    end
+    for id in pairs(store("shield")) do shield_of(id) end
+end
+function on_game_start()
+    RegisterScriptCallback("actor_on_update", tick)
+    RegisterScriptCallback("save_state", save_state)
+    RegisterScriptCallback("load_state", load_state)
+    RegisterScriptCallback("on_level_changing", on_level_changing)
+    RegisterScriptCallback("npc_on_net_spawn", on_net_spawn)
+    RegisterScriptCallback("monster_on_net_spawn", monster_spawned)
+    RegisterScriptCallback("monster_on_net_destroy", monster_gone)
+    RegisterScriptCallback("on_option_change", cfg_flush)
+    every("zf_cleanup", 300, cleanup, true)
+    every("zf_logic_sweep", 5, sweep_logic, true)
+    every("zf_acts", 1, end_acts, true)
+    every("zf_shield_look", 1, look, true)
+    every("zf_feuds", 2, settle_feuds, true)
+    RegisterScriptCallback("on_enemy_eval", spare_eval)
+    RegisterScriptCallback("npc_on_hit_callback", spare_hit)
+    RegisterScriptCallback("npc_on_before_hit", shielded_hit)
+    RegisterScriptCallback("monster_on_before_hit", shielded_hit)
+    hook_peer_msgs()
+    every_anywhere("zf_peer_orders", 5, install_orders)
+    guard_change_team()
+    guard_offline_combat()
+    guard_corpse_loot()
+    guard_camper()
+    guard_smart_saves()
+    guard_population()
+end

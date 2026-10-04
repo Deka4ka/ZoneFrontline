@@ -1,0 +1,105 @@
+local C = zf_core
+local CMD_PREFIX = "__zf_cmd"
+local COMMANDS = {
+    "set_companion_to_stealth_substate", "set_companion_to_default_substate", "set_companion_to_wait_state",
+    "set_companion_to_follow_state", "set_companion_to_attack_state", "set_companion_to_ignore_combat_state",
+    "set_companion_to_attack_only_actor_combat_enemy_state", "switch_companion_distance", "set_companion_hide_in_cover",
+    "set_companion_combat_type_camper", "set_companion_combat_type_monolith", "set_companion_combat_type_default",
+    "switch_companion_patrol_mode", "switch_companion_gather_items", "switch_companion_loot_corpses",
+}
+local function owners()
+    return C.store("comp_owner")
+end
+local function on()
+    return C.cfg("coop_companions", true)
+end
+function leader_of(npc)
+    if not on() then return end
+    local sq = C.squad_of(npc:id())
+    local key = sq and owners()[sq.id]
+    if not key or key == "host" then return end
+    local p = C.player_by_key(key)
+    return p and p:alive() and p or nil
+end
+local followed = false
+local function hook_follow()
+    if followed or not (axr_beh and axr_beh.action_beh) then return end
+    followed = true
+    local cls = axr_beh.action_beh
+    local orig = cls.set_desired_target
+    cls.set_desired_target = function(self)
+        local ok = orig(self)
+        if ok and self.st.target == "actor" then
+            pcall(function()
+                local p = leader_of(self.object)
+                if not p then return end
+                local t = self.st.desired_target
+                t.level_vertex_id, t.game_vertex_id = p:level_vertex_id(), p:game_vertex_id()
+                t.position, t.direction, t.object = p:position(), p:direction(), p
+            end)
+        end
+        return ok
+    end
+end
+local recruit_wrapped = false
+local function hook_recruit()
+    local h = _G.xrr_story_quest_handlers
+    local add = h and rawget(h, "__companion_add")
+    if recruit_wrapped or not add then return end
+    recruit_wrapped = true
+    h["__companion_add"] = function(npc_host_id)
+        local key = C.peer_key(_G.xrr_quest_accept_conn)
+        add(npc_host_id)
+        local ok, err = pcall(function()
+            local sq = npc_host_id and C.squad_of(npc_host_id)
+            if sq and axr_companions.companion_squads[sq.id] and key ~= "host" then
+                owners()[sq.id] = key
+                C.log("companions: squad %s now follows peer %s", sq.id, key)
+            end
+        end)
+        if not ok then C.warn("companions: %s", err) end
+    end
+end
+local forwarded = false
+local function forward_commands()
+    if forwarded or not dialogs_axr_companion then return end
+    forwarded = true
+    for _, name in ipairs(COMMANDS) do
+        if dialogs_axr_companion[name] then
+            dialogs_axr_companion[name] = function() C.peer_order(CMD_PREFIX .. "|" .. name) end
+        end
+    end
+end
+local vanilla = {}
+local function serve_command(name, npc, owner)
+    local fn = vanilla[name]
+    if not (fn and npc) then return end
+    fn(db.actor, npc)
+    local sq = C.squad_of(npc:id())
+    if sq and owner ~= "host" and axr_companions.companion_squads[sq.id] then owners()[sq.id] = owner end
+end
+function set_owner(sq_id, key)
+    owners()[sq_id] = (key and key ~= "host") and key or nil
+end
+local function tidy()
+    for id in pairs(owners()) do
+        if not axr_companions.companion_squads[id] then owners()[id] = nil end
+    end
+end
+local function setup()
+    if not db.actor then return end
+    if C.peer() then
+        forward_commands()
+    else
+        hook_follow()
+        hook_recruit()
+    end
+end
+function on_game_start()
+    for _, name in ipairs(COMMANDS) do
+        vanilla[name] = dialogs_axr_companion and dialogs_axr_companion[name]
+    end
+    C.on_peer_order(CMD_PREFIX, serve_command)
+    C.every_anywhere("zf_coop_setup", 2, setup)
+    C.every("zf_coop_tidy", 30, tidy, true)
+end

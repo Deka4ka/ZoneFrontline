@@ -1,0 +1,1077 @@
+-- Monkey patches for Warfare
+
+-- Scientist escort task patch for xr_conditions.script + xr_effects.script
+old_anomaly_task_cond = xr_conditions.has_task_target_anomaly
+function xr_conditions.has_task_target_anomaly()
+    old_anomaly_task_cond()
+
+    local warfare_task = db.actor and load_var(db.actor, "warfare_escort_task_smart")
+    if IsWarfare() and warfare_task then
+        warfare_log.trace("has_task_target_anomaly: warfare escort task path, smart=%s", tostring(warfare_task))
+        return db.actor and load_var(db.actor, "task_target_anomaly_analyzed") == "not_analyzed"
+    end
+    return db.actor and load_var(db.actor, "task_target_anomaly") ~= nil
+end
+
+old_anomaly_task_effect = xr_effects.setup_task_target_anomaly
+function xr_effects.setup_task_target_anomaly()
+    old_anomaly_task_effect()
+
+    local targets = {}
+    local warfare_task = db.actor and load_var(db.actor, "warfare_escort_task_smart")
+    if IsWarfare() and warfare_task then
+        local target_name
+        target_name = level.name()
+        warfare_log.debug("setup_task_target_anomaly: warfare escort, level=%s", tostring(target_name))
+
+        save_var(db.actor, "task_target_anomaly_level", target_name) -- xQd
+        save_var(db.actor, "task_target_anomaly_analyzed", "not_analyzed") -- xQd
+        return
+    else
+        for k, v in pairs(db.anomaly_by_name) do
+            targets[#targets + 1] = k
+        end
+
+        if (#targets <= 0) then
+            warfare_log.warn("setup_task_target_anomaly: no anomalies registered in db.anomaly_by_name")
+            return
+        end
+
+        local target_name = targets[math.random(#targets)]
+        warfare_log.debug("setup_task_target_anomaly: picked anomaly=%s of %s", tostring(target_name), tostring(#targets))
+        save_var(db.actor, "task_target_anomaly", target_name)
+    end
+end
+
+
+-- Patch to fix jupiter escort quest completion when anomalous research is also active
+old_ecolog_companion_task_2_complete_task = dialogs_jupiter.ecolog_companion_task_2_complete_task
+function dialogs_jupiter.ecolog_companion_task_2_complete_task(a, b)
+    old_ecolog_companion_task_2_complete_task(a, b)
+    warfare_log.debug("ecolog_companion_task_2_complete_task: invoked")
+
+    local tm = task_manager.get_task_manager()
+    local task_info = tm.task_info
+    if (task_info) then
+        if (task_info["sim_default_ecolog_trader_task_1"]) then
+            warfare_log.info("ecolog_companion_task_2: completing sim_default_ecolog_trader_task_1")
+            task_manager.get_task_manager():set_task_completed("sim_default_ecolog_trader_task_1")
+        elseif (task_info["jup_b6_scientist_tech_task_1"]) then
+            warfare_log.info("ecolog_companion_task_2: completing jup_b6_scientist_tech_task_1")
+            task_manager.get_task_manager():set_task_completed("jup_b6_scientist_tech_task_1")
+        end
+    end
+    a:stop_talk()
+    b:stop_talk()
+end
+
+local function has_dynamic_pda_tabs()
+    local ok, supported = pcall(function()
+        return pda_dynamic_tabs and type(pda_dynamic_tabs.register) == "function"
+            and type(pda_dynamic_tabs.unregister) == "function"
+            and CUITabControl and CUITabControl.AddTab ~= nil
+    end)
+    return ok and supported or false
+end
+
+local pda_dynamic_tab_active = false
+if has_dynamic_pda_tabs() then
+    local registered = false
+    RegisterScriptCallback("actor_on_first_update", function()
+        if registered or not IsWarfare() then
+            return
+        end
+        registered = true
+        pda_dynamic_tabs.register("st_wrfr_pda_tab", function()
+            return ui_pda_warfare_tab.get_ui()
+        end, "eptContacts")
+        pda_dynamic_tab_active = true
+    end)
+end
+
+local pda_set_active_subdialog = pda.set_active_subdialog
+function pda.set_active_subdialog(section)
+    if section == "eptContacts" and _G.WARFARE and pda_dynamic_tab_active then
+        return ui_pda_contacts_tab.get_ui()
+    end
+
+    local ret = pda_set_active_subdialog(section)
+
+    if _G.WARFARE and not pda_dynamic_tab_active then
+        local pda_menu = ActorMenu.get_pda_menu()
+        local tab_control = pda_menu and pda_menu:GetTabControl()
+        local contacts_btn = tab_control and tab_control:GetButtonById("eptContacts")
+        if contacts_btn then
+            contacts_btn:TextControl():SetText(game.translate_string("st_wrfr_pda_tab"))
+        end
+    end
+
+    return ret
+end
+
+-- dialogs.script only maps 8 faction communities when WARFARE is set and
+-- concatenates nil for anyone else (e.g. Barman: community "trader").
+local important_docs_warfare_names = {
+    ["stalker"] = "bar_visitors_barman_stalker_trader",
+    ["bandit"] = "zat_b7_bandit_boss_sultan",
+    ["csky"] = "mar_smart_terrain_base_stalker_leader_marsh",
+    ["dolg"] = "bar_dolg_leader",
+    ["army"] = "agr_smart_terrain_1_6_near_2_military_colonel_kovalski",
+    ["killer"] = "cit_killers_merc_trader_stalker",
+    ["ecolog"] = "yan_stalker_sakharov",
+    ["freedom"] = "mil_smart_terrain_7_7_freedom_leader_stalker",
+}
+
+local dialogs_st_trade_important_documents = dialogs.st_trade_important_documents
+function dialogs.st_trade_important_documents(a, b, typ, txt)
+    if not _G.WARFARE then
+        return dialogs_st_trade_important_documents(a, b, typ, txt)
+    end
+
+    local npc = dialogs.who_is_npc(a, b)
+    local se_obj = alife_object(npc:id())
+    local npc_name = se_obj and important_docs_warfare_names[se_obj:community()]
+    if not npc_name then
+        npc_name = npc:section()
+        if npc_name == "m_trader" then
+            npc_name = npc:name()
+        end
+    end
+
+    local str = game.translate_string("st_trade_important_documents_" .. typ .. "_" .. npc_name)
+    return strformat(str, txt)
+end
+
+-- faction_expansions.script mutant spawn patches
+-- 2023/05/21 - Vintar - removed tushkano
+-- 2023/12/06 - Vintar - split mutant spawns by level closeness to center
+-- 2024/08/05 - Vintar - fix crash on nil resource count
+
+local random_mutants_south = {
+    "simulation_boar",
+    "simulation_boar",
+    "simulation_boar",
+    "simulation_dog",
+    "simulation_dog",
+    "simulation_dog",
+    "simulation_pseudodog",
+    "simulation_pseudodog",
+    "simulation_flesh",
+    "simulation_flesh",
+    "simulation_flesh",
+    "simulation_mix_dogs",
+    "simulation_mix_dogs",
+    "simulation_mix_dogs",
+    "simulation_mix_dogs",
+    "simulation_mix_boar_flesh",
+    "simulation_mix_boar_flesh",
+    "simulation_mix_boar_flesh",
+    "simulation_cat",
+    "simulation_cat",
+    "simulation_cat",
+    "simulation_zombie",
+    "simulation_zombie",
+    "simulation_zombie",
+}
+
+local random_rare_south = {
+    "simulation_bloodsucker",
+    "simulation_snork",
+    "simulation_snork",
+    "simulation_snork",
+    "simulation_psysucker",
+    "simulation_lurker",
+    "simulation_lurker",
+    "simulation_lurker",
+    "simulation_lurker",
+    "simulation_lurker",
+    "simulation_fracture",
+    "simulation_fracture",
+    "simulation_fracture",
+    "simulation_fracture",
+}
+
+local random_mutants_mid = {
+    "simulation_boar",
+    "simulation_boar",
+    "simulation_boar",
+    "simulation_dog",
+    "simulation_dog",
+    "simulation_dog",
+    "simulation_pseudodog",
+    "simulation_pseudodog",
+    "simulation_flesh",
+    "simulation_flesh",
+    "simulation_flesh",
+    "simulation_mix_dogs",
+    "simulation_mix_dogs",
+    "simulation_mix_dogs",
+    "simulation_mix_dogs",
+    "simulation_mix_boar_flesh",
+    "simulation_mix_boar_flesh",
+    "simulation_mix_boar_flesh",
+    "simulation_cat",
+    "simulation_cat",
+    "simulation_cat",
+    "simulation_zombie",
+    "simulation_zombie",
+    "simulation_zombie",
+    "simulation_lurker",
+    "simulation_lurker",
+    "simulation_lurker",
+    "simulation_fracture",
+    "simulation_fracture",
+    "simulation_snork",
+    "simulation_snork",
+}
+
+local random_rare_mid = {
+    "simulation_gigant",
+    "simulation_controller",
+    "simulation_controller",
+    "simulation_controller",
+    "simulation_burer",
+    "simulation_chimera",
+    "simulation_bloodsucker",
+    "simulation_bloodsucker",
+    "simulation_bloodsucker",
+    "simulation_bloodsucker",
+    "simulation_bloodsucker",
+    "simulation_psysucker",
+    "simulation_psysucker",
+    "simulation_psysucker",
+    "simulation_psy_dog",
+    "simulation_psy_dog",
+}
+
+local random_mutants_north = {
+    "simulation_boar",
+    "simulation_boar",
+    "simulation_boar",
+    "simulation_boar",
+    "simulation_dog",
+    "simulation_dog",
+    "simulation_pseudodog",
+    "simulation_pseudodog",
+    "simulation_pseudodog",
+    "simulation_pseudodog",
+    "simulation_flesh",
+    "simulation_flesh",
+    "simulation_mix_dogs",
+    "simulation_mix_dogs",
+    "simulation_mix_dogs",
+    "simulation_mix_dogs",
+    "simulation_mix_boar_flesh",
+    "simulation_mix_boar_flesh",
+    "simulation_cat",
+    "simulation_cat",
+    "simulation_cat",
+    "simulation_zombie",
+    "simulation_zombie",
+    "simulation_zombie",
+    "simulation_zombie",
+    "simulation_lurker",
+    "simulation_lurker",
+    "simulation_lurker",
+    "simulation_lurker",
+    "simulation_fracture",
+    "simulation_fracture",
+    "simulation_snork",
+    "simulation_snork",
+}
+
+local random_rare_north = {
+    "simulation_gigant",
+    "simulation_gigant",
+    "simulation_controller",
+    "simulation_controller",
+    "simulation_controller",
+    "simulation_burer",
+    "simulation_chimera",
+    "simulation_chimera",
+    "simulation_chimera",
+    "simulation_bloodsucker",
+    "simulation_bloodsucker",
+    "simulation_bloodsucker",
+    "simulation_psysucker",
+    "simulation_psysucker",
+    "simulation_psysucker",
+    "simulation_psy_dog",
+    "simulation_psy_dog",
+    "simulation_psy_dog",
+}
+
+local random_mutants_labs = {
+    "simulation_tushkano",
+    "simulation_tushkano",
+    "simulation_tushkano",
+    "simulation_tushkano",
+    "simulation_zombie",
+    "simulation_zombie",
+    "simulation_zombie",
+    "simulation_zombie",
+    "simulation_zombie",
+    "simulation_zombie",
+    "simulation_fracture",
+    "simulation_fracture",
+    "simulation_fracture",
+    "simulation_snork",
+    "simulation_snork",
+    "simulation_snork",
+}
+
+local random_rare_labs = {
+    "simulation_gigant",
+    "simulation_controller",
+    "simulation_controller",
+    "simulation_burer",
+    "simulation_burer",
+    "simulation_burer",
+    "simulation_bloodsucker",
+    "simulation_bloodsucker",
+    "simulation_bloodsucker",
+    "simulation_poltergeist_tele",
+    "simulation_poltergeist_flame",
+    "simulation_psysucker",
+    "simulation_psysucker",
+    "simulation_psysucker",
+}
+
+local random_zombies = {
+    "simulation_zombie",
+}
+
+-- old functions were overly complicated and had a weird minimum at 80% resource ownership where your squads would be worse on average
+-- new functions are monotonically increasing so that each point of resource is always a sizeable benefit
+function faction_expansions.get_advanced_chance(resource)
+    --    return -1 * (100 * (1 / math.pow(warfare.resource_count / 2, 2))) * math.pow((resource - (warfare.resource_count / 2)), 2) + 100
+    return 150 * (math.pow((resource / warfare.resource_count), 0.8))
+end
+
+function faction_expansions.get_veteran_chance(resource)
+    --    return -100 + (100 / (warfare.resource_count / 2)) * resource
+    return 80 * (math.pow((resource / warfare.resource_count), 0.8))
+end
+
+local faction_expansions_get_spawn_section = faction_expansions.get_spawn_section
+function faction_expansions.get_spawn_section(faction, resource, current_level)
+    local days_in_zone = utils_obj.time_spent_in_zone(4)
+        if days_in_zone == false then
+            days_in_zone = 0
+        end
+        resource = resource + math.floor(days_in_zone / 2)
+        resource = math.min(resource, warfare.resource_count)
+    if (resource) then
+    else
+        resource = 0  -- nil resource count
+        warfare_log.warn("get_spawn_section: nil resource count for faction=%s, defaulting to 0", tostring(faction))
+    end
+    warfare_log.trace("get_spawn_section: faction=%s resource=%s level=%s days=%s", tostring(faction), tostring(resource), tostring(current_level), tostring(days_in_zone))
+
+    if (faction ~= "monster") then
+        if warfare_behavior.is_independent(faction) then
+            -- independent factions have set chances for squad skill: 7% veteran, 36% advanced, 57% novice
+            return faction_expansions.get_section(faction, 36, 7)
+        else
+            local advanced = faction_expansions.get_advanced_chance(resource)
+            local veteran = faction_expansions.get_veteran_chance(resource)
+            return faction_expansions.get_section(faction, advanced, veteran)
+        end
+    elseif (faction == "monster") then
+        return faction_expansions.get_section(faction, resource, current_level)  -- for monster spawns, 'resource' is rare_chance
+    end
+end
+
+local faction_expansions_get_section = faction_expansions.get_section
+function faction_expansions.get_section(faction, advanced_chance, veteran_chance)
+    local r = math.random(0, 100)
+
+    -- faction_list is local in faction_expansions, replicate mapping here
+    local faction_list = {
+        ["stalker"]  = "stalker",
+        ["monolith"] = "monolith",
+        ["csky"]     = "csky",
+        ["army"]     = "army",
+        ["killer"]   = "merc",
+        ["ecolog"]   = "ecolog",
+        ["dolg"]     = "duty",
+        ["freedom"]  = "freedom",
+        ["bandit"]   = "bandit",
+        ["greh"]     = "greh",
+        ["isg"]      = "isg",
+        ["renegade"] = "renegade",
+        ["zombied"]  = "zombied",
+    }
+    local name = faction_list[faction]
+
+    if name then
+        if r <= veteran_chance then
+            return (name .. "_sim_squad_veteran")
+        elseif r <= advanced_chance then
+            return (name .. "_sim_squad_advanced")
+        else
+            return (name .. "_sim_squad_novice")
+        end
+    elseif faction == "monster" then
+        if not (IsSurvivalMode()) then
+            local current_level = veteran_chance -- using `veteran_chance` to store level number for mutants
+            -- Pick correct section by level
+            if current_level < 7 then  -- south level
+                if (r <= advanced_chance) then
+                    return random_rare_south[math.random(#random_rare_south)]
+                else
+                    return random_mutants_south[math.random(#random_mutants_south)]
+                end
+            elseif (current_level > 12) and (current_level < 32) then  -- north or lab level
+                if ((current_level > 19) and (current_level < 27)) or (current_level == 29) or (current_level == 31) then  -- labs will spawn scary mutants
+                    if (r <= advanced_chance) then
+                        return random_rare_labs[math.random(#random_rare_labs)]
+                    else
+                        return random_mutants_labs[math.random(#random_mutants_labs)]
+                    end
+                else  -- north level
+                    if (r <= advanced_chance) then
+                        return random_rare_north[math.random(#random_rare_north)]
+                    else
+                        return random_mutants_north[math.random(#random_mutants_north)]
+                    end
+                end
+            else  -- mid level
+                if (r <= advanced_chance) then
+                    return random_rare_mid[math.random(#random_rare_mid)]
+                else
+                    return random_mutants_mid[math.random(#random_mutants_mid)]
+                end
+            end
+        else
+            return random_zombies[math.random(#random_zombies)]
+        end
+    end
+
+    return nil
+end
+
+local game_relations_calculate_relation_change = game_relations.calculate_relation_change
+function game_relations.calculate_relation_change(victim_tbl, killer_tbl)
+    if not warfare_relations.enabled() then
+        return game_relations_calculate_relation_change(victim_tbl, killer_tbl)
+    end
+    return warfare_relations.contribute(victim_tbl, killer_tbl)
+end
+
+local tasks_assault_evaluate_smarts_squads = tasks_assault.evaluate_smarts_squads
+function tasks_assault.evaluate_smarts_squads(task_id, tbl, smart, squad_def, faction_def)
+    if (not smart or not _G.WARFARE) then
+        tasks_assault_evaluate_smarts_squads(task_id, tbl, smart, squad_def, faction_def)
+        return
+    end
+
+    local smrt_id = smart.id
+    local smrt_name = smart:name()
+
+    if (simulation_objects.base_smarts[smrt_name] == true) then
+        return
+    end
+
+    local smrt = smrt_id and SIMBOARD.smarts[smrt_id]
+    if (not smrt) then
+        return
+    end
+
+    for sq_id, _ in pairs(smrt.squads) do
+
+        -- if warfare, override checks on stay time, default squad stuff
+        -- if smart's squad is on its level + they are targeting it
+        local squad = smart_terrain_warfare.resolve_roster_squad(smrt_id, sq_id)
+        if (not squad) then
+            goto continue
+        end
+
+        local is_same_level = simulation_objects.is_on_the_same_level(squad, smart)
+        local is_targeting_smart = squad.current_target_id and (squad.current_target_id == smrt_id)
+        local is_attacking = squad.current_action == 1
+        local has_enough_npcs = squad:npc_count() >= squad_def.num
+        local has_stay_time = squad.stay_time ~= nil
+        local within_stay_time = (not squad_def.stay_time) or (squad_def.stay_time and (warfare.get_time_ref():diffSec(squad.stay_time) <= tonumber(squad_def.stay_time)))
+        local is_not_scripted = squad_def.scripted or (not squad:get_script_target())
+        local no_script_target = not squad:get_script_target()
+
+        if is_same_level
+                and is_targeting_smart
+                and is_attacking
+                and (
+                (has_enough_npcs and has_stay_time and within_stay_time and is_not_scripted)
+                or no_script_target
+        )
+        then
+            local is_legit_mutant_squad = tasks_assault.is_legit_mutant_squad
+            for fac, _ in pairs(faction_def) do
+
+                -- if squad is from enemies table
+                if (is_legit_mutant_squad(squad) and squad.player_id == fac) then
+                    --squad.stay_time = warfare.get_time()
+                    tbl[sq_id] = smrt_id
+                end
+            end
+        end
+
+        ::continue::
+    end
+end
+
+local tasks_assault_evaluate_squads_smarts = tasks_assault.evaluate_squads_smarts
+function tasks_assault.evaluate_squads_smarts(task_id, var, squad, smart)
+    if not _G.WARFARE then
+        return tasks_assault_evaluate_squads_smarts(task_id, var, squad, smart)
+    end
+
+    if squad and simulation_objects.is_on_the_same_level(squad, smart) then
+        if not (squad.first_update) then
+            return true
+        end
+
+        if (var.scripted or (not squad:get_script_target()))
+                and (squad.current_target_id and squad.current_target_id == smart.id and squad.current_action == 1)
+        then
+            local cache_assault_func = tasks_assault.cache_assault_func
+            local is_legit_mutant_squad = tasks_assault.is_legit_mutant_squad
+            for i = 1, #cache_assault_func[task_id] do
+                local fac = cache_assault_func[task_id][i]
+                if (is_legit_mutant_squad(squad) and squad.player_id == fac) then
+                    -- updating data
+                    var.squad_id = squad.id
+                    save_var(db.actor, task_id, var)
+
+                    --WARFARE START: force squad selected for task to stay at smart
+                    squad.stay_time = warfare.get_time()
+                    --WARFARE END
+
+                    squad.force_online = true
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+-- Hooks for compatibility patches (see warfare_zcp_patch): the section to create for one squad
+-- member (nil skips the member) and the number of random members to add.
+function squad_member_section(squad, section)
+    return section
+end
+
+function squad_random_count(squad, count)
+    return count
+end
+
+-- Warfare games only: per-faction squad sizes apply to warfare's own spawns and service squads
+-- (trader, mechanic, ...) get one NPC. Other games keep the installed create_npc.
+local sim_squad_scripted_create_npc = sim_squad_scripted.sim_squad_scripted.create_npc
+function sim_squad_scripted.sim_squad_scripted.create_npc(self, spawn_smart, pos, lvid, gvid)
+    if not IsWarfare() then
+        return sim_squad_scripted_create_npc(self, spawn_smart, pos, lvid, gvid)
+    end
+
+    --utils_data.debug_write("sim_squad_scripted:create_npc")
+    local settings_id = self:section_name()
+    local spawn_sections = parse_names(ini_sys:r_string_ex(settings_id, "npc") or "")
+    warfare_log.trace("sim_squad_scripted.create_npc: section=%s smart=%s sections=%s", tostring(settings_id), tostring(spawn_smart and spawn_smart:name()), tostring(#spawn_sections))
+
+    local base_spawn_position, base_lvi, base_gvi, spawn_vid
+    if (spawn_smart) then
+
+        -- Try to look/parse spawn_vid in either squad logic or smart logic
+        local spawn_vid = ini_sys:r_string_to_condlist(settings_id, "spawn_vid") or spawn_smart.ini:r_string_to_condlist(settings_id, "spawn_vid")
+        if (spawn_vid) then
+            local str = xr_logic.pick_section_from_condlist(db.actor, self, spawn_vid)
+            if (str and str ~= "" and str ~= "nil") then
+                local vid = str_explode(str, ":")
+                base_lvi = tonumber(vid[1])
+                base_spawn_position = level.vertex_position(base_lvi)
+                base_gvi = tonumber(vid[2])
+            end
+        end
+
+        -- Try to look/parse spawn_point in either squad logic or smart logic
+        if not (base_spawn_position and base_lvi and base_gvi) then
+            local spawn_point = ini_sys:r_string_to_condlist(settings_id, "spawn_point") or spawn_smart.ini:r_string_to_condlist(settings_id, "spawn_point")
+            if (spawn_point) then
+                local p_path = xr_logic.pick_section_from_condlist(db.actor, self, spawn_point)
+                if (p_path and p_path ~= "" and p_path ~= "nil") then
+                    local pat = patrol(p_path)
+                    if (pat) then
+                        base_spawn_position = pat:point(0)
+                        base_lvi = pat:level_vertex_id(0)
+                        base_gvi = pat:game_vertex_id(0)
+                    end
+                end
+            end
+        end
+
+        -- Try spawn_smart.spawn_point
+        if not (base_spawn_position and base_lvi and base_gvi) then
+            if (spawn_smart.spawn_point) then
+                local pat = patrol(spawn_smart.spawn_point)
+                if (pat) then
+                    base_spawn_position = pat:point(0)
+                    base_lvi = pat:level_vertex_id(0)
+                    base_gvi = pat:game_vertex_id(0)
+                end
+            end
+        end
+
+        -- if all else fail, spawn on smart
+        if not (base_spawn_position and base_lvi and base_gvi) then
+            base_spawn_position = spawn_smart.position
+            base_lvi = spawn_smart.m_level_vertex_id
+            base_gvi = spawn_smart.m_game_vertex_id
+        end
+
+        self.smart_id = spawn_smart.id
+    else
+        base_spawn_position = pos or self.position
+        base_lvi = lvid or self.m_level_vertex_id
+        base_gvi = gvid or self.m_game_vertex_id
+    end
+
+    local npcs_list = {}
+    for ind = 1, #spawn_sections do
+        local section = squad_member_section(self, spawn_sections[ind])
+        local id = section and self:add_squad_member(section, base_spawn_position, base_lvi, base_gvi, ind)
+        if (id) then
+            npcs_list[#npcs_list + 1] = id
+        end
+    end
+
+    local random_spawn = ini_sys:r_string_ex(settings_id, "npc_random")
+    if random_spawn ~= nil then
+        random_spawn = parse_names(random_spawn)
+
+        local count = ini_sys:r_string_ex(settings_id, "npc_in_squad") or "1,2"
+        count = str_explode(count, ",")
+        count[1] = count[1] and tonumber(count[1])
+        count[2] = count[2] and tonumber(count[2]) or count[1]
+
+        -- Warfare's own spawns only: story squads keep their scripted npc_in_squad.
+        if _G.WARFARE and warfare.spawning_own then
+            local faction = ini_sys:r_string_ex(settings_id, "faction")
+            if (warfare_options.options.factions[faction]) then
+                if (warfare_options.options.factions[faction].random_squad_count) then
+                    count[1] = tonumber(warfare_options.options.factions[faction].min_random_squad_count)
+                    count[2] = tonumber(warfare_options.options.factions[faction].max_random_squad_count)
+                end
+            end
+
+            --WARFARE START
+            -- check if trying to spawn trader/mechanic/medic/barman squad
+            for i = 1, #random_spawn do
+                if string.find(random_spawn[i], "trader") or string.find(random_spawn[i], "mechanic") or string.find(random_spawn[i], "barman") or string.find(random_spawn[i], "medic") or string.find(random_spawn[i], "tech") or string.find(random_spawn[i], "informator") then
+                    count[1] = 1
+                    count[2] = 1
+                end
+            end
+            --WARFARE END
+        end
+
+        -- check for random squad members for each faction here.
+
+        local random_count = count[1] and count[2] and math.random(count[1], count[2]) or math.random(1, 2)
+        random_count = squad_random_count(self, random_count - self:npc_count())
+
+        local random_id
+        for i = 1, random_count do
+            random_id = math.random(1, #random_spawn)
+            local section = squad_member_section(self, random_spawn[random_id])
+            local id = section and self:add_squad_member(section, base_spawn_position, base_lvi, base_gvi)
+            if (id) then
+                npcs_list[#npcs_list + 1] = id
+            end
+        end
+    elseif #spawn_sections == 0 then
+    end
+
+    if not (spawn_smart) then
+        local smart = self.smart_id and db.smart_terrain_by_id[self.smart_id]
+        if (smart) then
+            local id
+            for i = 1, #npcs_list do
+                id = npcs_list[i]
+                local se_obj = id and alife_object(id)
+                if (se_obj) then
+                    smart:register_npc(se_obj)
+                    SIMBOARD:setup_squad_and_group(se_obj)
+                end
+            end
+        end
+    end
+
+    self:set_squad_relation()
+    self:refresh()
+end
+
+local tasks_smart_control_evaluate_smarts_squads = tasks_smart_control.evaluate_smarts_squads
+function tasks_smart_control.evaluate_smarts_squads(task_id, tbl, smart, squad_def, faction_def)
+    if (not smart or not _G.WARFARE) then
+        tasks_smart_control_evaluate_smarts_squads(task_id, tbl, smart, squad_def, faction_def)
+        return
+    end
+
+    local smrt_id = smart.id
+    local smrt = smrt_id and SIMBOARD.smarts[smrt_id]
+    if (not smrt) then
+        return
+    end
+
+    for sq_id, _ in pairs(smrt.squads) do
+
+        -- if warfare, override checks on stay time
+        -- if smart's squad is on its level + they are targeting it
+        local squad = smart_terrain_warfare.resolve_roster_squad(smrt_id, sq_id)
+        if squad and simulation_objects.is_on_the_same_level(squad, smart)
+                and squad.current_target_id and (squad.current_target_id == smrt_id)
+                and (squad.current_action == 1)
+                and (
+                (
+                        squad.stay_time
+                                and ((not squad_def.stay_time) or (squad_def.stay_time and (warfare.get_time_ref():diffSec(squad.stay_time) <= tonumber(squad_def.stay_time))))
+                                and (squad_def.scripted or (not squad:get_script_target()))
+                ) or not squad:get_script_target()
+        )
+        then
+            local is_legit_mutant_squad = tasks_smart_control.is_legit_mutant_squad
+
+            for fac, _ in pairs(faction_def) do
+
+                -- if squad is from enemies table
+                if (is_legit_mutant_squad(squad) and squad.player_id == fac) then
+                    --squad.stay_time = warfare.get_time()
+                    tbl[#tbl + 1] = sq_id
+                end
+            end
+        end
+    end
+end
+
+local tasks_smart_control_evaluate_squads_smarts = tasks_smart_control.evaluate_squads_smarts
+function tasks_smart_control.evaluate_squads_smarts(task_id, var, smart, smrt)
+    if not _G.WARFARE then
+        return tasks_smart_control_evaluate_squads_smarts(task_id, var, smart, smrt)
+    end
+
+    for sq_id, _ in pairs(smrt.squads) do
+
+        local squad = smart_terrain_warfare.resolve_roster_squad(smrt.smrt and smrt.smrt.id, sq_id)
+        if squad and simulation_objects.is_on_the_same_level(squad, smart) then
+            if not (squad.first_update) then
+                return true
+            end
+
+            if (var.scripted or (not squad:get_script_target()))
+                    and (squad.current_target_id and squad.current_target_id == smart.id and squad.current_action == 1)
+            then
+                local cache_func = tasks_smart_control.cache_func
+                local is_legit_mutant_squad = tasks_smart_control.is_legit_mutant_squad
+                for i = 1, #cache_func[task_id] do
+                    local fac = cache_func[task_id][i]
+                    if (is_legit_mutant_squad(squad) and squad.player_id == fac) then
+
+                        -- squad.stay_time = warfare.get_time()
+
+                        squad.force_online = true
+                        return sq_id
+                    end
+                end
+            end
+        end
+    end
+    return false
+end
+
+local trade_names = {
+    ["stalker"]     = "items\\trade\\trade_stalker_owl.ltx",
+    ["bandit"]         = "items\\trade\\trade_bandit.ltx",
+    ["csky"]         = "items\\trade\\trade_csky_spore.ltx",
+    ["army"]         = "items\\trade\\trade_military.ltx",
+    ["freedom"]     = "items\\trade\\trade_freedom.ltx",
+    ["dolg"]         = "items\\trade\\trade_duty.ltx",
+    ["ecolog"]         = "items\\trade\\trade_ecolog_sakharov.ltx",
+    ["killer"]         = "items\\trade\\trade_mercenary.ltx",
+    ["monolith"]     = "items\\trade\\trade_monolith.ltx",
+    ["renegade"]     = "items\\trade\\trade_renegade.ltx",
+    ["greh"]         = "items\\trade\\trade_greh.ltx",
+    ["isg"]         = "items\\trade\\trade_isg.ltx",
+}
+
+local xr_logic_configure_schemes = xr_logic.configure_schemes
+function xr_logic.configure_schemes(npc, ini, ini_filename, stype, section_logic, gulag_name)
+    if not _G.WARFARE then
+        return xr_logic_configure_schemes(npc, ini, ini_filename, stype, section_logic, gulag_name)
+    end
+    --printf("DEBUG: enable_scripts: npc:name()=%s", npc:name())
+
+    if not (npc) then
+        warfare_log.err("configure_schemes: NPC IS NIL!")
+        abort("configure_schemes: NPC IS NIL!")
+        return
+    end
+
+    local npc_id = npc:id()
+    local st = db.storage[npc_id]
+    if not (st) then
+        warfare_log.trace("configure_schemes: no db.storage for npc=%s id=%s", tostring(npc:name()), tostring(npc_id))
+        return
+    end
+    warfare_log.trace("configure_schemes: npc=%s id=%s section_logic=%s ini_filename=%s", tostring(npc:name()), tostring(npc_id), tostring(section_logic), tostring(ini_filename))
+
+    -- if some scheme was previously active, deactivate it
+    if st.active_section then
+        warfare_log.trace("configure_schemes: deactivating prev scheme=%s on npc=%s", tostring(st.active_scheme), tostring(npc:name()))
+        xr_logic.issue_event(npc, st[st.active_scheme], "deactivate", npc)
+    end
+
+    local actual_ini
+    local actual_ini_filename
+
+    if (ini_filename == "<customdata>") then
+        -- the case where custom_data in object section exists
+        local custom_data = ini_sys:r_string_ex(npc:section(), "custom_data")
+        if (custom_data) then
+            actual_ini_filename = custom_data
+            actual_ini = ini_file(custom_data)
+        end
+    end
+
+    local filename = ini:r_string_ex(section_logic, "cfg")
+    if filename then
+        -- a link, because custom_data cannot have more then 4096 bytes of data
+        actual_ini_filename = filename
+        actual_ini = ini_file(filename)
+    end
+
+    actual_ini_filename = actual_ini_filename or ini_filename
+    actual_ini = actual_ini or ini
+
+    if not (actual_ini) then
+        warfare_log.err("configure_schemes: actual_ini nil for npc=%s actual_ini_filename=%s section_logic=%s", tostring(npc:name()), tostring(actual_ini_filename), tostring(section_logic))
+        callstack()
+        printe("!ERROR: object '%s' actual_ini=%s actual_ini_filename=%s %s=%s", npc:name(), actual_ini ~= nil, actual_ini_filename, section_logic, actual_ini and actual_ini:section_exist(section_logic))
+        return
+    end
+
+    -- Since at the moment of schema activation the previously installed common schemes could work, all of them should be disabled:
+    xr_logic.disable_generic_schemes(npc, stype)
+    -- We include all the general schemes (wounded, callback for hit, etc.):
+    xr_logic.enable_generic_schemes(actual_ini, npc, stype, section_logic)
+
+    st.active_section = nil
+    st.active_scheme = nil
+    st.gulag_name = gulag_name
+
+    st.stype = stype
+    st.ini = actual_ini
+    st.ini_filename = actual_ini_filename
+    st.section_logic = section_logic
+
+    -- ������������� ��������
+    if (stype == modules.stype_trader or stype == modules.stype_stalker) then
+        if npc and (npc:alive()) then
+            local trade_ini = actual_ini:r_string_ex(section_logic, "trade")
+
+            if trade_ini then
+                if xr_conditions.check_npc_trader(db.actor, npc) then
+                    -- only true if the npc is a warfare-spawned trader
+                    local faction = character_community(npc)
+                    trade_ini = trade_names[faction]
+                    warfare_log.debug("configure_schemes: warfare trader npc=%s faction=%s trade_ini=%s", tostring(npc:name()), tostring(faction), tostring(trade_ini))
+                end
+            else
+                trade_ini = "items\\trade\\trade_generic.ltx"                -- generic stalkers give generic trade inventory
+            end
+            trade_manager.trade_init(npc, trade_ini)
+            xr_logic.spawn_items(npc, st)
+        end
+    end
+
+    return st.ini
+end
+
+-- global_position.from() can return nil from two different places and callers feed the result
+-- straight into vector math, so the nil surfaces as a crash several frames away from its origin
+-- (see sim_offline_combat.calculate_distance_combat_multiplier). Both branches are logged so the
+-- offending object and the branch that produced the nil land in the log ahead of any such crash.
+--
+-- Object path (level_id nil): vanilla from() falls off the end when an object has no .position or
+-- no .m_game_vertex_id. Note vanilla recurses through the script-global from(), which is this
+-- function, so an object on an unmapped level ends up in the position path below.
+-- Position path (level_id set): no offset entry for that level_id.
+-- A missing offset is a property of the level, and a missing position a property of the object, so
+-- both repeat for as long as the condition lasts. Callers include per-squad loops over every smart
+-- (sim_offline_combat.calculate_distance_combat_multiplier), which turns one broken level into
+-- thousands of identical lines, so each key is reported once per session.
+local warned_offset = {}
+local warned_object = {}
+
+local global_position_from = global_position.from
+global_position.from = function(object_or_position, level_id)
+    if (level_id == nil) then
+        local gp = global_position_from(object_or_position, level_id)
+        if not (gp) then
+            -- tostring() throughout: any of these can be nil, and string.format("%s", nil) throws.
+            local id = object_or_position and object_or_position.id
+            if not (warned_object[id or 0]) then
+                warned_object[id or 0] = true
+                warfare_log.warn("global_position.from: nil for object id=%s name=%s gvid=%s level_id=%s pos=%s (reported once)",
+                    tostring(id),
+                    tostring(id and object_or_position:name()),
+                    tostring(object_or_position and object_or_position.m_game_vertex_id),
+                    tostring(object_or_position and object_or_position.level_id),
+                    (object_or_position and object_or_position.position) and "ok" or "nil")
+            end
+        end
+        return gp
+    end
+
+    local offset = global_position.level_offsets[level_id]
+    if (not object_or_position) or (not offset) then
+        if not (warned_offset[level_id]) then
+            warned_offset[level_id] = true
+            warfare_log.warn("global_position.from: nil for position level_id=%s pos=%s offset=%s (reported once)",
+                tostring(level_id),
+                object_or_position and "ok" or "nil",
+                offset and "ok" or "nil")
+        end
+        return
+    end
+    local p = object_or_position
+    return vector():set(p.x + offset[1], p.y + offset[2], p.z + offset[3])
+end
+
+-- Warfare special NPCs (trader/mechanic/medic/barman) spawn from vanilla "sim_default_*" squad
+-- sections, so task UIs that classify a giver by section-name substring (e.g. PDA Taskboard)
+-- misread them as roaming sim stalkers and generate simulation_task_* instead of the real
+-- trader_task_*/mechanic_task_* their dialog offers -- producing tasks that can't be turned in.
+-- Force the non-sim path for them at the chokepoint so every caller (PDA, dialogs) matches the
+-- giver's own turn-in logic. generate_ongoing_tasks is already warfare-aware, so this closes the
+-- one remaining asymmetry. Guarded by is_warfare_trader so non-warfare sim traders are untouched.
+-- This patch can be removed once the fix lands in the modded exes (base axr_task_manager.script
+-- given the same warfare-aware treatment as generate_ongoing_tasks).
+local old_axr_generate_available_tasks = axr_task_manager.generate_available_tasks
+function axr_task_manager.generate_available_tasks(npc, is_sim)
+    if is_sim and IsWarfare() and warfare.is_warfare_trader(npc) then
+        warfare_log.trace("generate_available_tasks: forcing non-sim for warfare trader npc=%s", tostring(npc:name()))
+        is_sim = false
+    end
+    return old_axr_generate_available_tasks(npc, is_sim)
+end
+
+local old_task_objects_cgeneraltask_check_task = task_objects.CGeneralTask.check_task
+function task_objects.CGeneralTask.check_task(self, tm)
+    if not IsWarfare() then
+        old_task_objects_cgeneraltask_check_task(self, tm)
+        return
+    end
+
+    local previous_last_check_task = self.last_check_task
+    old_task_objects_cgeneraltask_check_task(self, tm)
+    local last_check_task = self.last_check_task
+    if previous_last_check_task ~= last_check_task or self.storyline then
+        return
+    end
+
+    tm = task_manager.get_task_manager()
+    local tsk = tm.task_info[self.id]
+    if not (tsk) then
+        return
+    end
+
+    local se_obj = tsk.task_giver_id and alife_object(tsk.task_giver_id)
+    if (not se_obj or not se_obj.alive ) then
+        return
+    end
+
+    if xr_conditions.task_giver_alive(nil, nil, {self.id}) then
+        return
+    end
+
+    warfare_log.info("CGeneralTask.check_task: task=%s giver dead, marking fail", tostring(self.id))
+    self.last_check_task = "fail"
+end
+
+-- warfare caches game time per frame; a time jump inside a frame must drop that cache
+local old_level_change_game_time = level.change_game_time
+function level.change_game_time(days, hours, minutes)
+    old_level_change_game_time(days, hours, minutes)
+    warfare.reset_frame_clock()
+end
+
+-- simulation_objects finds a registered object by id with a linear scan over object_registry.
+-- by_id mirrors that array (first entry per id wins, as in the scan). register/unregister keep it
+-- current; if the array or its size changes any other way, the next lookup rebuilds it.
+-- Remove once the required engine/base scripts ship an indexed get_server_entity.
+local so = simulation_objects
+if type(so.object_registry) == "table" and type(so.object_registry_size) == "number" then
+    local by_id = {}
+    local indexed_reg, indexed_size = nil, -1
+    local drift_warned = false
+
+    local function rebuild()
+        by_id = {}
+        local reg, n = so.object_registry, so.object_registry_size
+        for i = n, 1, -1 do
+            local se_obj = reg[i]
+            by_id[se_obj.id] = se_obj
+        end
+        indexed_reg, indexed_size = reg, n
+    end
+
+    local function in_sync()
+        return so.object_registry == indexed_reg and so.object_registry_size == indexed_size
+    end
+
+    rebuild()
+
+    local old_register = so.register
+    function so.register(se_obj)
+        local synced = in_sync()
+        old_register(se_obj)
+        local n = so.object_registry_size
+        if synced and n == indexed_size + 1 and so.object_registry[n] == se_obj then
+            local id = se_obj.id
+            if by_id[id] == nil then
+                by_id[id] = se_obj
+            end
+            indexed_size = n
+        end
+    end
+
+    local old_unregister = so.unregister
+    function so.unregister(se_obj)
+        local synced = in_sync()
+        old_unregister(se_obj)
+        local n = so.object_registry_size
+        if synced and n == indexed_size - 1 then
+            local id, reg, first = se_obj.id, so.object_registry, nil
+            for i = 1, n do
+                if reg[i].id == id then
+                    first = reg[i]
+                    break
+                end
+            end
+            by_id[id] = first
+            indexed_size = n
+        end
+    end
+
+    function so.get_server_entity(id)
+        if not in_sync() then
+            if not drift_warned then
+                drift_warned = true
+                warfare_log.warn("simulation_objects.object_registry changed outside register/unregister (size %s, indexed %s); rebuilding id index",
+                    so.object_registry_size, indexed_size)
+            end
+            rebuild()
+        end
+        return by_id[id]
+    end
+end

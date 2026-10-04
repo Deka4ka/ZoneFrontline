@@ -1,0 +1,784 @@
+<?xml version="1.0" encoding="windows-1251" ?>
+<string_table>
+	<!-- Player Command MCM section -->
+	<string id="ui_mm_menu_command">
+		<text>Player Command</text>
+	</string>
+	<string id="ui_mm_alife_warfare_command_command_mode">
+		<text>Player squad command</text>
+	</string>
+	<string id="ui_mm_alife_warfare_command_command_mode_desc">
+		<text>Lets you take persistent control of your faction's squads from the PDA map, select and order multiple squads, and group them into detachments. Ranked scales how many squads you may hold with your rank, and only squads that stand below you will obey. Unrestricted gives you the same commands with no limits at all: any number of squads, any tier. Off removes the command menu entirely</text>
+	</string>
+	<string id="ui_mm_lst_ranked">
+		<text>Ranked</text>
+	</string>
+	<string id="ui_mm_lst_unrestricted">
+		<text>Unrestricted</text>
+	</string>
+	<string id="ui_mm_alife_warfare_command_command_max_squads">
+		<text>Maximum controllable squads</text>
+	</string>
+	<string id="ui_mm_alife_warfare_command_command_max_squads_desc">
+		<text>Ranked mode only. How many squads you can hold under control once you reach the highest rank. You start with one and the cap grows with every rank you gain. Which squads you may take depends on how far they stand below you: squads two or more ranks below are unrestricted, squads one rank below fill at most half your cap, and squads of your own standing or higher will not take your orders</text>
+	</string>
+	<string id="ui_mm_prst_warfare_alifeoverhaul_balanced">
+		<text>Alife Overhaul - Balanced</text>
+	</string>
+	<string id="ui_mm_prst_warfare_alifeoverhaul_all_out_war">
+		<text>Alife Overhaul - All Out War</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_use_old_auto_capture">
+		<text>Use old auto-capture method</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_use_old_auto_capture_desc">
+		<text>When this option is enabled, autocapture will occur using the old method, where a squad is spawned on top of your position for free once the capture time has elapsed.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_hide_lair_smarts">
+		<text>Hide lair smart terrains</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_hide_lair_smarts_desc">
+		<text>When enabled, the PDA will not display icons for smart terrains with no useful properties, such as purely mutant lair terrains.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_actor_support_goodwill_base">
+		<text>Goodwill on kill: base</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_actor_support_goodwill_base_desc">
+		<text>When you kill an enemy, you will be granted this amount of goodwill with your faction plus a bonus based on the victim's rank and the multiplier: goodwill = base + (enemy rank * rank multiplier). Loners receive 50% of this value.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_actor_support_goodwill_weight">
+		<text>Goodwill on kill: enemy rank multiplier</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_actor_support_goodwill_weight_desc">
+		<text>This setting affects the bonus amount of faction goodwill granted on kill based on the victim's rank. The goodwill gained is equal to: goodwill = base + (enemy rank * rank multiplier)</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_monster_max_squads_per_level_lab">
+		<text>Max monster squads per level (laboratories)</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_monster_max_squads_per_level_lab_desc">
+		<text>This setting is the same as the "max monster squads per level" setting, but applies for all underground and laboratory levels.</text>
+	</string>
+
+	<string id="ui_mm_alife_warfare_general_territory_diplo_penalty">
+		<text>Contested terrains strain relations</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_territory_diplo_penalty_desc">
+		<text>When enabled, a faction gets upset when a base it was going for is captured by another faction it is not at war with.</text>
+	</string>
+
+	<string id="ui_mm_alife_warfare_general_monster_rare_chance_south">
+		<text>Rare mutant % chance (Southern Zone)</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_monster_rare_chance_south_desc">
+		<text>The percent chance that a mutant spawn in military warehouses/dead city/truck cemetery and south will be a rare mutant (controller, chimera, etc). Default: 3</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_monster_rare_chance_north">
+		<text>Rare mutant % chance (Northern Zone)</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_monster_rare_chance_north_desc">
+		<text>The percent chance that a mutant spawn in Limansk/red forest/radar and north will be a rare mutant (controller, chimera, etc). Default: 10</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_monster_rare_chance_lab">
+		<text>Rare mutant % chance (Laboratories)</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_monster_rare_chance_lab_desc">
+		<text>The percent chance that a mutant spawn in a laboratory will be a rare mutant (controller, chimera, etc). Default: 50</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_monster_night_power_multiplier">
+		<text>Mutant Night Power Multiplier</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_monster_night_power_multiplier_desc">
+		<text>Multiplier applied to mutant squad power during offline combat at night (22:00 - 06:00). Makes mutants harder to defeat in offline simulation during nighttime. Default: 2.0</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_zcp_mutant_spawns">
+		<text>Mutant spawns follow ZCP</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_zcp_mutant_spawns_desc">
+		<text>With Zone Customization Project installed, ZCP decides which mutants warfare spawns: its random-mutant chance, spawn templates or balanced tables, species and variant toggles, and mutant squad size. Warfare still decides where, when and how many.\nOff: warfare picks its own mutants and ZCP leaves them alone. No effect without ZCP.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_prevent_mainbase_attacks">
+		<text>Protect Original Main Bases from Attack</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_prevent_mainbase_attacks_desc">
+		<text>When enabled, no faction can ever target another faction's main base as long as it is still held by its original owner. For example, the Duty Base at Rostok cannot be targeted while Duty controls it, but becomes a valid target if another faction captures it. This prevents unique NPCs from being wiped out by early invasions. Disable this setting when using randomized starting locations.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_offline_combat_distance">
+		<text>Offline Combat Distance (Warfare ONLY)</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_offline_combat_distance_desc">
+		<text>Maximum distance, in meters, that offline squads will engage in offline combat when "Full" offline combat is used. Default: 50</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_overflow_overrides_manual_control">
+		<text>Automate overflow squad handling during manual control</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_overflow_overrides_manual_control_desc">
+		<text>Typically, when manual faction control is disabled, overflow squads (i.e. squads surpassing the smart terrain limit) are automatically re-assigned.  When manual faction control is enabled, overflow squads are no longer handled automatically. Toggling this setting on restores the automated handling of these squads while preserving the rest of the manual faction control functionality.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_distance_based_combat_multiplier">
+		<text>Distance-based combat multiplier</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_distance_based_combat_multiplier_desc">
+		<text>Enable distance-based combat effectiveness multipliers. Squads perform better when fighting near friendly strategic locations like bases, resources, territory, and lairs.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_distance_combat_min_multiplier">
+		<text>Distance combat min multiplier</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_distance_combat_min_multiplier_desc">
+		<text>The minimum combat effectiveness multiplier applied when squads are far from any friendly strategic locations. This is the baseline combat strength used at maximum distance.</text>	</string>
+	<string id="ui_mm_alife_warfare_general_distance_combat_max_multiplier_base">
+		<text>Distance combat max multiplier (base)</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_distance_combat_max_multiplier_base_desc">
+		<text>Maximum combat effectiveness multiplier when near friendly bases. Bases provide the strongest strategic support and highest combat bonus.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_distance_combat_max_multiplier_resource">
+		<text>Distance combat max multiplier (resource)</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_distance_combat_max_multiplier_resource_desc">
+		<text>Maximum combat effectiveness multiplier when near friendly resource points. Resources provide moderate support through supplies and equipment.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_distance_combat_max_multiplier_territory">
+		<text>Distance combat max multiplier (territory)</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_distance_combat_max_multiplier_territory_desc">
+		<text>Maximum combat effectiveness multiplier when near friendly territory. Controlled territory provides basic support through familiar terrain.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_distance_combat_max_multiplier_lair">
+		<text>Distance combat max multiplier (lair)</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_distance_combat_max_multiplier_lair_desc">
+		<text>Maximum combat effectiveness multiplier when near friendly lairs.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_distance_combat_max_distance">
+		<text>Distance combat max distance</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_distance_combat_max_distance_desc">
+		<text>The maximum distance at which distance-based combat multipliers are calculated. Squads beyond this distance from friendly strategic locations receive the minimum multiplier.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_use_new_resurgence_logic">
+		<text>Use new resurgence logic</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_use_new_resurgence_logic_desc">
+		<text>Chooses which emergency resurrection runs when a faction is down to zero bases and its resurgence timer elapses. Enabled: a force of at least 4 squads, scaling to 1.5x the target's population cap, spawns at the nearest safe territory, resource or lair and attacks one enemy or empty base, preferring bases flagged as that faction's resurrection sites and never picking the level you are on; the resurgence chance setting is ignored, so every attempt goes through. Disabled: the old system rolls resurgence chance first, then sends roughly twice the target's population cap at a random enemy or empty base on a random level.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_spawn_speed_multiplier">
+		<text>Global spawn speed</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_spawn_speed_multiplier_desc">
+		<text>Controls the speed of all faction spawns and patrols globally. 0.1 = slowest (10x slower), 1 = normal, 10 = fastest (10x faster). Default: 1</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_spawn_timer_max_multiplier">
+		<text>Spawn timer max multiplier</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_spawn_timer_max_multiplier_desc">
+		<text>Controls how much longer the maximum spawn/patrol timer is compared to the minimum. The actual timer for a base is interpolated between min and max based on faction strength; max = min * multiplier. Default: 200</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_use_bases_not_resources">
+		<text>Squad quality depends on base count (instead of resources)</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_use_bases_not_resources_desc">
+		<text>Normally, a faction's squad quality is calculated based on the number of resources it holds. When this option is selected, this faction's squad quality will be calculated based on number of held bases instead. Primarily meant to be used for factions that don't care about resources (ex: army).</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_offline_power_multiplier_desc">
+		<text>Squad power in offline combat is multiplied by this amount. If this is set to 2, for instance, squads that are a part of this faction will deal twice as much damage as typical squads in offline combat.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_expansion_aggression_desc">
+		<text>The overall aggression and offensive responsiveness of a faction. More aggressive factions will send squads to capture empty targets sooner, add additional targets to each of their bases faster, and plan invasions to those targets sooner. Higher aggression will also cause a faction to prioritize carrying out invasion plans sooner by sending squads from nearby bases, whereas less aggressive factions will be more content to keep their squads at their current locations.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_night_activity_chance_desc">
+		<text>The chance that a faction will send out invasion forces or send patrol squads anywhere during the night time. Night time is considered as between the hours of 8:00pm and 6:00am, or 20:00 and 6:00. Whether a smart terrain can be active during nighttime is decided once per night per smart terrain. For free stalker and ecologist factions, this sets the likelihood for a squad to visit another resource point instead of going back to base for the night.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_min_faction_respawn_desc">
+		<text>This is how many in-game minutes it takes for a faction to spawn a squad from a base point if they own only one base. As your faction gains more bases, each individual base will have a slightly longer spawn time approaching that of the maximum respawn time. The actual respawn time of a given base is linearly interpolated based on the min/max respawn values and the percentage of bases in the Zone you control.</text>
+	</string>
+
+	<string id="ui_mm_alife_warfare_faction_min_invasion_size_desc">
+		<text>The minimum invasion size factor. A random number between the minimum and maximum invasion size factors is multiplied by the calculated invasion size to give the number of squads that a base will invade with. The size of the invasion force is calculated using the max capacity of the target location, reinforcement potential of any enemy locations near the target, the relative difference in squad power between the factions, and these min/max factors. The invasion size cannot be more than twice the maximum capacity of the origin base (ex: if a base with max capacity of 2 plans to invade a target with max capacity of 5, the invasion can be no larger than 4 squads). If this limitation prevents a small base from planning an adequate invasion, that base will instead contribute squads to a larger nearby base's invasion force.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_max_invasion_size_desc">
+		<text>The maximum invasion size factor. A random number between the minimum and maximum invasion size factors is multiplied by the calculated invasion size to give the number of squads that a base will invade with. The size of the invasion force is calculated using the max capacity of the target location, reinforcement potential of any enemy locations near the target, the relative difference in squad power between the factions, and these min/max factors. The invasion size cannot be more than twice the maximum capacity of the origin base (ex: if a base with max capacity of 2 plans to invade a target with max capacity of 5, the invasion can be no larger than 4 squads). If this limitation prevents a small base from planning an adequate invasion, that base will instead contribute squads to a larger nearby base's invasion force. This value is also used for defense to determine the desired power factor versus incoming enemy forces: a value of 1.5 means that the defending base will try to call reinforcements to get a power advantage 1.5x that of the enemy invasion.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_patrol_squads">
+		<text>Patrol squads per base</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_patrol_squads_desc">
+		<text>How many patrol squads each base of this faction keeps out at once. 0 disables base patrols.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_min_patrol_time_desc">
+		<text>This is how many in-game minutes it takes for a faction to spawn a patrol squad from a base point if they own only one base. As your faction gains more bases, each individual base will have a slightly longer patrol spawn time approaching that of the maximum patrol respawn time. The actual patrol respawn time of a given base is linearly interpolated based on the min/max patrol respawn values and the percentage of bases in the Zone you control.</text>
+	</string>
+
+	<string id="ui_mm_alife_warfare_faction_patrol_hunt_chance_desc">
+		<text>When a base is looking for a new target for a patrol squad, and if there is an enemy patrol squad on the current level or a linked level, this is the chance that the base will assign the enemy patrol squad as a target; if the squad is not assigned an enemy patrol squad as a target then it will be assigned a territory/lair point near the base to patrol as usual.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_min_patrol_rest_time_desc">
+		<text>The minimum amount of time a patrol squad will wait at a territory/lair point. Night activity chance will also affect whether or not they are sent to a new point.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_max_patrol_rest_time_desc">
+		<text>The maximum amount of time a patrol squad will wait at a territory/lair point. Night activity chance will also affect whether or not they are sent to a new point.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_resurgence_chance">
+		<text>Resurgence Chance</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_resurgence_chance_desc">
+		<text>When a faction owns zero bases, they are considered 'defeated'. Once defeated, they have a chance for a 'resurgence', where a large attack force appears in an attempt to capture a random enemy base on the map. The timer for this attack depends on the minimum and maximum resurgence times. Additionally, there is a chance that the resurgence attempt will be skipped over: a resurgence chance of 50 will skip half of all resurgence attempts, while a resurgence chance of 0 will always skip attempts (as if the faction is permanently defeated). This only applies while "Use new resurgence logic" is disabled - the new logic ignores this chance and carries out every attempt.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_random_squad_count_desc">
+		<text>When enabled, every squad for this faction will have a random number of NPCs between min_random_squad_count and max_random_squad_count.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_min_random_squad_count_desc">
+		<text>When random_squad_count is enabled, this is the minimum number of NPCs a squad will have for this faction.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_max_random_squad_count_desc">
+		<text>When random_squad_count is enabled, this is the maximum number of NPCs a squad will have for this faction.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_random_patrols_desc">
+		<text>Random patrols are squads that periodically target locations all over. They spawn preferentially on a faction's owned points, otherwise they can spawn anywhere in the Zone. Their targeting is influenced by your faction's priorities for base/resource/territory/levels. They can be temporarily commanded by you to move to certain points, but will eventually pick their own target after some amount of idle time.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_max_random_patrols_desc">
+		<text>This is the absolute maximum amount of random patrols a faction can have at once.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_min_random_patrol_time_desc">
+		<text>The lowest possible time for a new random patrol of this faction to spawn. The actual spawn time is randomly chosen between this number and the maximum random patrol time.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_max_random_patrol_time_desc">
+		<text>The highest possible time for a new random patrol of this faction to spawn. The actual spawn time is randomly chosen between this number and the minimum random patrol time.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_invasion_departure_chance_desc">
+		<text>The chance that an invasion will depart during the current process_targets update. This is called every 1 to 5 in-game minutes.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_base_priority_desc">
+		<text>How much the faction prioritises bases.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_resource_priority_desc">
+		<text>How much the faction prioritises resource points.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_flag_priority_desc">
+		<text>How much a base prioritises points that are flagged for their owning faction in the gamedata/configs/misc/simulation_objects_props.ltx file. For instance if Clear Sky is looking at a territory point, it will increase the priority for a point by 2 if in that file the point has csky = 1 defined for it.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_is_being_targeted_priority_desc">
+		<text>If a base is being targeted by another base, it will add this much priority to it in order to attempt to counter the invasion.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_target_weaker_priority_desc">
+		<text>How much a base prioritises points which have less powerful squads present.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_target_stronger_priority_desc">
+		<text>How much a base prioritises points which have more powerful squads present.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_target_on_same_level_priority_desc">
+		<text>How much a base prioritises points which are on the same level as itself.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_max_smart_targets_per_base_desc">
+		<text>The maximum possible number of targets a base can have at once. Bases will add extra targets beyond their minimum number of targets based on their faction aggression setting. Higher faction aggressions cause bases to add targets faster. This setting should be kept at or above the minimum smart targets per base.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_min_smart_targets_per_base">
+		<text>Minimum smart targets per base</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_min_smart_targets_per_base_desc">
+		<text>A base will always target at least this many locations. The base will send squads to empty targets, or invade hostile targets.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_resource_count_modifier_desc">
+		<text>How many resource points are added to a faction's resource count. This can be negative. Higher numbers cause stronger squads to spawn.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_base_count_modifier_desc">
+		<text>How many bases are added to a faction's owned base count. This can be negative. Higher numbers cause longer base respawn times, approaching the value set by maximum respawn time.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_emission_effect">
+		<text>Emission effect on warfare squads</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_emission_effect_desc">
+		<text>What happens to warfare squads during an emission. Kill removes them. Zombify replaces them with zombied patrol squads matching the original squad's tier.</text>
+	</string>
+	<string id="ui_mm_lst_kill">
+		<text>Kill</text>
+	</string>
+	<string id="ui_mm_lst_zombify">
+		<text>Zombify</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_log_level">
+		<text>Log level</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_log_level_desc">
+		<text>Verbosity of the Warfare log file (warfare.log). ERROR and WARN also mirror to default log. OFF disables all warfare logging. Default: WARN.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_enable_busyhands_tracer">
+		<text>Enable busyhands tracer</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_enable_busyhands_tracer_desc">
+		<text>When enabled, writes per-entrypoint trace files to warfare_trace/ on every engine call. After a crash, the last line of the matching trace file points at the engine call that died. Off in normal play (file I/O overhead). Requires a game restart to take effect.</text>
+	</string>
+	<string id="ui_mm_lst_error">
+		<text>Error</text>
+	</string>
+	<string id="ui_mm_lst_warn">
+		<text>Warn</text>
+	</string>
+	<string id="ui_mm_lst_info">
+		<text>Info</text>
+	</string>
+	<string id="ui_mm_lst_debug">
+		<text>Debug</text>
+	</string>
+	<string id="ui_mm_lst_trace">
+		<text>Trace</text>
+	</string>
+
+	<string id="ui_mm_alife_warfare_general_purge_zone_percentage_desc">
+		<text>The percentage of warfare squads hit each time an emission fires. Only matters when "Emission effect on warfare squads" is set to Kill or Zombify. Default: 5</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_min_invasion_depart_time_desc">
+		<text>The shortest a gathered invasion force waits at its launch base before setting out. The actual delay is rolled between this and the maximum. If the force is whittled below its planned size the timer resets and restarts once the squads are replaced.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_max_invasion_depart_time_desc">
+		<text>The longest a gathered invasion force waits at its launch base before setting out. The actual delay is rolled between the minimum and this value; a value below the minimum is clamped up to it.</text>
+	</string>
+
+	<string id="ui_mm_alife_warfare_faction_spawn_on_new_game_desc">
+		<text>Whether this faction is handed starting bases, resource points and squads when a new Warfare game is seeded. Disable it to start the faction with nothing on the map.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_random_spawn_entries_desc">
+		<text>How many extra entries this faction gets in the draw for each unclaimed base or resource point during world seeding. At 0 it only claims locations flagged for it in simulation_objects_props.ltx; higher values scatter it across the Zone.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_keep_last_base_desc">
+		<text>When enabled, this faction cannot be wiped off the map: once it is down to a single base, that base stays in its hands even while enemy squads occupy it.</text>
+	</string>
+
+	<string id="ui_mm_alife_warfare_faction_linked_level_targeting_desc">
+		<text>When enabled, a base only looks for targets on its own level and on levels directly connected to it. When disabled it considers locations anywhere in the Zone, which reaches distant fronts but spreads the faction thin.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_ignore_empty_targets_desc">
+		<text>When enabled, this faction only expands by taking bases off another faction and will not claim unowned ones. Bases it abandons stay empty until someone else claims them. Squad relocation is unaffected: overflowing bases can still move squads to empty ground.</text>
+	</string>
+
+	<string id="ui_mm_alife_warfare_faction_min_resurgence_wait_time_desc">
+		<text>The shortest wait between resurgence attempts while this faction is defeated (holds zero bases). Each attempt is scheduled at a random time between the minimum and the maximum.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_max_resurgence_wait_time_desc">
+		<text>The longest wait between resurgence attempts while this faction is defeated (holds zero bases). Each attempt is scheduled at a random time between the minimum and the maximum.</text>
+	</string>
+
+	<string id="ui_mm_alife_warfare_faction_target_faction_stronger_priority_desc">
+		<text>Added to a target's priority when the faction holding it owns more bases and resources overall than this one. Raise it to make this faction gang up on the leader, lower it to make it avoid stronger rivals.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_target_faction_weaker_priority_desc">
+		<text>Added to a target's priority when the faction holding it owns fewer bases and resources overall than this one. Raise it to make this faction finish off rivals that are already losing.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_target_resource_priority_desc">
+		<text>Added to a target's priority once for every resource point on the level it sits on. Raise it to pull this faction toward resource-rich levels regardless of how valuable the individual location is.</text>
+	</string>
+
+	<string id="ui_mm_alife_warfare_faction_lvl_k00_marsh_priority_desc">
+		<text>Flat priority added to every target on the Great Swamps. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_k01_darkscape_priority_desc">
+		<text>Flat priority added to every target on Darkscape. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_l01_escape_priority_desc">
+		<text>Flat priority added to every target on Cordon. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_l02_garbage_priority_desc">
+		<text>Flat priority added to every target on Garbage. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_l03_agroprom_priority_desc">
+		<text>Flat priority added to every target on Agroprom. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_l04_darkvalley_priority_desc">
+		<text>Flat priority added to every target in the Dark Valley. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_l05_bar_priority_desc">
+		<text>Flat priority added to every target on Rostok. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_l06_rostok_priority_desc">
+		<text>Flat priority added to every target in the Wild Territory. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_l07_military_priority_desc">
+		<text>Flat priority added to every target in the Army Warehouses. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_l08_yantar_priority_desc">
+		<text>Flat priority added to every target on Yantar. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_l09_deadcity_priority_desc">
+		<text>Flat priority added to every target in the Dead City. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_l10_limansk_priority_desc">
+		<text>Flat priority added to every target in Limansk. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_l10_radar_priority_desc">
+		<text>Flat priority added to every target on Radar. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_l10_red_forest_priority_desc">
+		<text>Flat priority added to every target in the Red Forest. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_l11_hospital_priority_desc">
+		<text>Flat priority added to every target at the Deserted Hospital. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_l11_pripyat_priority_desc">
+		<text>Flat priority added to every target in Pripyat. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_l12_stancia_priority_desc">
+		<text>Flat priority added to every target at Chernobyl NPP (South). Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_l12u_sarcofag_priority_desc">
+		<text>Flat priority added to every target in the Sarcophagus. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_l12u_control_monolith_priority_desc">
+		<text>Flat priority added to every target in the Monolith Control Center. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_l12_stancia_2_priority_desc">
+		<text>Flat priority added to every target at Chernobyl NPP (North). Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_l13_generators_priority_desc">
+		<text>Flat priority added to every target at the Generators. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_zaton_priority_desc">
+		<text>Flat priority added to every target on Zaton. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_jupiter_priority_desc">
+		<text>Flat priority added to every target on Jupiter. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_pripyat_priority_desc">
+		<text>Flat priority added to every target in the Outskirts. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_jupiter_underground_priority_desc">
+		<text>Flat priority added to every target in the Jupiter Underground. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lvl_k02_trucks_cemetery_priority_desc">
+		<text>Flat priority added to every target in the Truck Cemetery. Positive values draw this faction toward the level, negative values push it away.</text>
+	</string>
+	<!-- Warfare preset save/delete UI -->
+	<string id="ui_mm_warfare_preset_save">
+		<text>Save preset</text>
+	</string>
+	<string id="ui_mm_warfare_preset_delete">
+		<text>Delete preset</text>
+	</string>
+	<string id="ui_mm_warfare_preset_name">
+		<text>Preset name</text>
+	</string>
+	<string id="ui_mm_warfare_preset_overwrite">
+		<text>Overwrite the preset '%s'?</text>
+	</string>
+	<string id="ui_mm_warfare_preset_protected">
+		<text>'%s' is a built-in preset and cannot be replaced. Pick another name.</text>
+	</string>
+	<string id="ui_mm_warfare_preset_confirm_delete">
+		<text>Delete the preset '%s'?</text>
+	</string>
+	<string id="ui_mm_warfare_preset_bad_name">
+		<text>Use latin letters or digits</text>
+	</string>
+	<!-- Mutant lair targeting -->
+	<string id="ui_mm_alife_warfare_faction_lair_priority">
+		<text>Mutant lair priority</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lair_priority_desc">
+		<text>How much this faction wants to clear mutant lairs. Lairs are the lowest-priority target: a squad is only sent to one once no resource or territory is available. This value is added to the faction's priority for the level its base sits on, and a lair is pursued only when that total is above zero. A strongly negative value therefore keeps lairs off even on the faction's favourite levels, while any positive value enables them almost everywhere. Default: -75</text>
+	</string>
+	<!-- Overflow relocation -->
+	<string id="ui_mm_alife_warfare_general_overflow_distance_cost">
+		<text>Overflow travel cost per 100m</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_overflow_distance_cost_desc">
+		<text>How many priority points a relocating squad pays for every 100 units it travels. Overflow scoring is additive, so this converts distance into the same units as the base, resource and territory weights: a destination is dropped once the travel cost exceeds what it is worth. That makes each target's effective travel radius equal to its total priority divided by this value, so raise it to keep squads local and lower it to let them roam. Default: 5</text>
+	</string>
+	<!-- Capture refusals (map menu / autocapture) -->
+	<string id="st_wrfr_cap_deny_type">
+		<text>%s cannot be taken - only bases and resource points can be held.</text>
+	</string>
+	<string id="st_wrfr_cap_deny_faction">
+		<text>%s will not be held by our faction.</text>
+	</string>
+	<string id="st_wrfr_cap_deny_range">
+		<text>%s is too far away to organise a capture.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_sec_world">
+		<text>World &amp; New Game</text>
+	</string>
+	<string id="ui_mm_alife_warfare_sec_capture">
+		<text>Capture</text>
+	</string>
+	<string id="ui_mm_alife_warfare_sec_map">
+		<text>Map &amp; Visibility</text>
+	</string>
+	<string id="ui_mm_alife_warfare_sec_economy">
+		<text>Economy &amp; Rewards</text>
+	</string>
+	<string id="ui_mm_alife_warfare_sec_mutants">
+		<text>Mutants</text>
+	</string>
+	<string id="ui_mm_alife_warfare_sec_combat">
+		<text>Offline Combat</text>
+	</string>
+	<string id="ui_mm_alife_warfare_sec_timing">
+		<text>Spawn &amp; Invasion Timing</text>
+	</string>
+	<string id="ui_mm_alife_warfare_sec_world_events">
+		<text>Emissions &amp; Diplomacy</text>
+	</string>
+	<string id="ui_mm_alife_warfare_sec_debug">
+		<text>Diagnostics</text>
+	</string>
+	<string id="ui_mm_alife_warfare_sec_faction_spawning">
+		<text>Spawning</text>
+	</string>
+	<string id="ui_mm_alife_warfare_sec_faction_expansion">
+		<text>Expansion</text>
+	</string>
+	<string id="ui_mm_alife_warfare_sec_faction_targeting">
+		<text>Targeting</text>
+	</string>
+	<string id="ui_mm_alife_warfare_sec_faction_levels">
+		<text>Level Priorities</text>
+	</string>
+	<string id="ui_mm_alife_warfare_sec_faction_patrols">
+		<text>Patrols</text>
+	</string>
+	<string id="ui_mm_alife_warfare_sec_faction_strength">
+		<text>Strength</text>
+	</string>
+	<string id="ui_mm_alife_warfare_sec_faction_survival">
+		<text>Survival</text>
+	</string>
+	<string id="ui_mm_alife_warfare_sec_hidden">
+		<text>Hidden:</text>
+	</string>
+	<!-- Faction behavior traits -->
+	<string id="ui_mm_alife_warfare_sec_faction_behavior">
+		<text>Behavior</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_behavior_preset">
+		<text>Behavior preset</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_behavior_preset_desc">
+		<text>Lore: this faction's own traits, as shipped.\nGeneric: every trait at its neutral value - unified dispatch, closed holdings, holds its ground, full command and intel exchange, no barrier exemptions, lab appeal 1, patrols anywhere.\nPicking one sets all thirteen traits below. The label reads Custom while any trait differs from the chosen preset and returns on its own once they match again.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_dispatch_model">
+		<text>Dispatch model</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_dispatch_model_desc">
+		<text>Which routine moves this faction's squads.\nUnified: bases send squads out to expand and invade.\nLoner: squads scatter to resource points and mutant lairs by day, drift back to any friendly base at dusk, and attack only when they clearly outgun the defenders.\nEcologist: the same daily cycle, slower and strictly non-violent, preferring travel-hub bases at night.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_holdings_are_open">
+		<text>Open holdings</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_holdings_are_open_desc">
+		<text>Anyone not actively hostile can walk into the resource points and territory this faction holds and take them without a fight, however many squads are present.\nIts bases are a separate question, governed by «Displaceable at peace».</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_displaceable_at_peace">
+		<text>Displaceable at peace</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_displaceable_at_peace_desc">
+		<text>Factions at peace with this one may still send squads to occupy its bases. No fighting happens -- offline combat only ever runs between enemies -- so enough squads to outnumber the garrison simply takes the base.\nIts resource points and territory are governed separately by «Open holdings».</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_holds_ground">
+		<text>Holds ground</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_holds_ground_desc">
+		<text>Calls for reinforcements and flags its bases as under attack when an invasion arrives, and treats what it holds as worth something politically: taking its targets costs relations, and a base changing hands with it counts as a real conquest for respawn timers.\nTurned off, no help is sent, though whoever is already there still fights.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_no_central_command">
+		<text>No central command</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_no_central_command_desc">
+		<text>No leadership to answer to.\nWhen you belong to this faction, killing enemy fighters pays no money and earns only half the usual goodwill.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_no_intel_exchange">
+		<text>No intel exchange</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_no_intel_exchange_desc">
+		<text>No intel exchange with other factions.\nWith fog of war on, this faction neither receives what allied squads and outposts see nor shares what its own see. Its own squads and outposts still report to a player of this faction; allied outposts and anything allied squads spot stay fogged until you or your faction's squads look for yourselves. As an ally of this faction you get nothing from it either. Enemies and neutrals never share; PDA v2 or v3 sight of squads is unaffected.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_peacetime_appetite">
+		<text>Peacetime appetite</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_peacetime_appetite_desc">
+		<text>How readily this faction goes after bases held by someone it is not at war with. Never means it ignores them entirely.\nOtherwise it weighs them against everything else it could be doing, and this decides how heavily: reluctant only when one is almost next door, indifferent weighing such a base exactly as it would an enemy's.\nIt can only ever reach an owner marked Displaceable at peace.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_scorcher_travel">
+		<text>Brain Scorcher</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_scorcher_travel_desc">
+		<text>How the active Brain Scorcher restricts this faction.\nBlocked: cannot enter Radar or Red Forest, and cannot cross between north and south.\nDivide open: may cross between north and south, but still cannot enter Radar or Red Forest.\nExempt: no restriction at all.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_ignores_miracle_machine">
+		<text>Ignores Miracle Machine</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_ignores_miracle_machine_desc">
+		<text>Travels between Dead City and the south while the Miracle Machine is running.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lab_entrance_appeal">
+		<text>Lab entrance appeal</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_lab_entrance_appeal_desc">
+		<text>Multiplier on the priority of laboratory entrance smart terrains when this faction picks targets and patrol routes.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_patrol_scope">
+		<text>Patrol scope</text>
+	</string>
+	<string id="ui_mm_alife_warfare_faction_patrol_scope_desc">
+		<text>What the random patrols of this faction look for.\nAny: normal target scoring.\nLairs only: they hunt mutant dens and ignore everything else.</text>
+	</string>
+	<string id="ui_mm_lst_wf_dispatch_unified">
+		<text>Unified</text>
+	</string>
+	<string id="ui_mm_lst_wf_dispatch_loner">
+		<text>Loner</text>
+	</string>
+	<string id="ui_mm_lst_wf_dispatch_ecolog">
+		<text>Ecologist</text>
+	</string>
+	<string id="ui_mm_lst_wf_appetite_never">
+		<text>Never</text>
+	</string>
+	<string id="ui_mm_lst_wf_appetite_reluctant">
+		<text>Reluctant</text>
+	</string>
+	<string id="ui_mm_lst_wf_appetite_willing">
+		<text>Willing</text>
+	</string>
+	<string id="ui_mm_lst_wf_appetite_indifferent">
+		<text>Indifferent</text>
+	</string>
+	<string id="ui_mm_lst_wf_scorcher_blocked">
+		<text>Blocked</text>
+	</string>
+	<string id="ui_mm_lst_wf_scorcher_divide_open">
+		<text>Divide open</text>
+	</string>
+	<string id="ui_mm_lst_wf_scorcher_exempt">
+		<text>Exempt</text>
+	</string>
+	<string id="ui_mm_lst_wf_patrol_any">
+		<text>Any</text>
+	</string>
+	<string id="ui_mm_lst_wf_patrol_lairs">
+		<text>Lairs only</text>
+	</string>
+	<string id="ui_mm_lst_wf_preset_lore">
+		<text>Lore</text>
+	</string>
+	<string id="ui_mm_lst_wf_preset_generic">
+		<text>Generic</text>
+	</string>
+	<string id="ui_mm_lst_wf_preset_custom">
+		<text>Custom</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_fog_of_war_memory">
+		<text>Fog of war: remember last observed owner</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_fog_of_war_memory_desc">
+		<text>With fog of war on, a smart terrain that drops out of sight keeps showing the owner you last observed there, drawn in grey. Its hover text names that owner and how old the observation is. Only what you or your allies actually saw is remembered; a place you have never seen stays unknown.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_fog_of_war_blind">
+		<text>Blind: the map shows only what you see</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_fog_of_war_blind_desc">
+		<text>Cuts you off from the intel network. The map shows only what is within your own sight range and what your PDA reveals; squads, outposts and garrisons report nothing, your own faction included. Overrides fog of war: the fog view applies even with fog of war switched off. Remembering the last observed owner still works, from your own sightings only. A new game starts with every base unknown.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_sec_relations">
+		<text>Faction Relations</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_relation_pacing">
+		<text>Warfare drives faction relations</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_relation_pacing_desc">
+		<text>Warfare collects kills, stolen bases and task goodwill and moves faction standings on a daily budget, shown as arrows and a countdown on the PDA Relations tab.\nTurn off if another mod manages faction relations: the settings below then do nothing, kills change relations the vanilla way and the Relations tab shows plain standings.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_relation_daily_budget">
+		<text>Daily change limit</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_relation_daily_budget_desc">
+		<text>The most any two factions can move in one day, however hard the fighting is. 0 removes the cap.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_relation_step">
+		<text>Value of a kill</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_relation_step_desc">
+		<text>What one death is worth before shaping, scaled by the victim's rank and, a fifth as much, the killer's.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_relation_capture_step">
+		<text>Value of a capture</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_relation_capture_step_desc">
+		<text>What taking a contested place from a faction that was going for it costs, per point of that place's population.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_relation_friendship_rate">
+		<text>Friendship rate</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_relation_friendship_rate_desc">
+		<text>How fast relations move toward friendship, against what events say.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_relation_hostility_rate">
+		<text>Hostility rate</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_relation_hostility_rate_desc">
+		<text>How fast relations move toward hostility, against what events say.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_relation_reach">
+		<text>Distance from canon</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_relation_reach_desc">
+		<text>How far from their starting standing two factions can ever be dragged, as a share of the distance to alliance.\nAt the default, neutrals can ally; enemies can reach a ceasefire but not friendship.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_relation_decay">
+		<text>Return to canon</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_relation_decay_desc">
+		<text>How much of the distance back to their starting standing two factions recover each day when nothing is driving them apart.\nThree times stronger in story mode. Under all-out war it pulls toward neutral instead.</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_relation_all_pairs">
+		<text>Monolith and Sin diplomacy</text>
+	</string>
+	<string id="ui_mm_alife_warfare_general_relation_all_pairs_desc">
+		<text>Lets Monolith and Sin take part in relation changes: 66 faction pairs can move instead of 45.</text>
+	</string>
+	<string id="st_warfare_presim_title">
+		<text>The Zone lives on</text>
+	</string>
+	<string id="st_warfare_presim_progress">
+		<text>Day %s of %s, %s</text>
+	</string>
+	<string id="st_warfare_presim_emission">
+		<text>Waiting out the emission, %s</text>
+	</string>
+	<string id="st_warfare_presim_eta">
+		<text>About %s min left</text>
+	</string>
+	<string id="st_warfare_presim_desc">
+		<text>Let the Zone live before you arrive: factions fight over bases, squads spread out, emissions sweep the Zone. Takes several minutes of real time; you cannot play or save until it ends.</text>
+	</string>
+	<string id="st_warfare_presim_desc_resume">
+		<text>An interrupted simulation can continue: %s of %s game hours are done.</text>
+	</string>
+	<string id="st_warfare_presim_days">
+		<text>Days</text>
+	</string>
+	<string id="st_warfare_presim_step">
+		<text>Step, game minutes</text>
+	</string>
+	<string id="st_warfare_presim_steps">
+		<text>%s steps</text>
+	</string>
+	<string id="st_warfare_presim_start">
+		<text>Start</text>
+	</string>
+	<string id="st_warfare_presim_preparing">
+		<text>Preparing...</text>
+	</string>
+	<string id="st_mm_ck_story_desc">
+		<text>%c[ui_gray_2]Story mode allows the player to experience a unique set of story-driven and dynamic questlines.\n 
+		Note that story-driven questlines such as "Living Legend", "Mortal Sin" and "Operation Afterglow" are only available to Loner, Duty, Freedom, Ecologist, Mercenary and Clear Sky factions.\n
+		However, dynamic questlines can be enjoyed by all playable factions. In both cases, speak to your faction leader to begin. Have fun!\n \n
+		%c[ui_red]• %c[ui_gray_2]NOT compatible with Survival mode.\n
+		%c[ui_red]• %c[ui_gray_2]NOT compatible with Azazel mode.
+		</text>
+	</string>
+	<string id="st_mm_ck_warfare_desc">
+		<text>%c[ui_gray_2]Grants stalker's A-Life system more freedom, creating a more dynamic Zone.\n
+		Faction ownership of bases and territories is more prone to change. Medics, traders and mechanics are now also replaceable.\n
+		You have the ability to lead your faction and help them with taking over the surrounding areas, achieving dominance in the Zone.\n \n
+		%c[pda_white]• %c[ui_gray_2]Command your faction through the PDA map.\n
+		%c[ui_red]• %c[ui_gray_2]NOT compatible with Survival mode.
+		</text>
+	</string>
+</string_table>

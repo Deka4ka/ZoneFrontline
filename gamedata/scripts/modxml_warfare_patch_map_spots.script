@@ -1,0 +1,188 @@
+-- DXML script to inject faction-specific colored OUTLINE map spots.
+--
+-- The ring is the faction icon itself rendered through the "hud\font" shader
+-- (hud_font.ps: rgb = vertex colour, a = texture alpha), so it becomes a solid-colour
+-- silhouette of whatever icon is currently loaded -- fully compatible with icon mods,
+-- nothing is pre-baked. It is drawn slightly larger and at location_level=-1 so it
+-- sits behind the untinted icon
+--
+-- Yellow = planned target | Orange = invasion prepping | Red = under attack (squads advancing)
+--
+-- Also injects the circle_stale_<faction> spots used by fog-of-war memory (the icon through
+-- hud\faded) and the player-command rings.
+
+-- icon size is 24 (see circle_<faction>_spot); outline is a touch larger to peek out as a ring
+local OUTLINE_SIZE = 30
+local ICON_SIZE = 24
+
+-- Fog-of-war memory: the faction icon through hud\faded (shipped in
+-- gamedata/shaders/<r1|r2|r3>/hud_faded.*: half-desaturated, gamma-lifted, then multiplied by
+-- the vertex colour). The tint gives it a slight cool cast so it reads as recorded, not live.
+local STALE_TINT = { 209, 230, 255 }
+local STALE_A = 230
+
+function on_xml_read()
+	warfare_log.debug("modxml_warfare_patch_map_spots.on_xml_read: registering callback")
+	RegisterScriptCallback("on_xml_read", function(xml_file_name, xml_obj)
+		if string.find(xml_file_name, "map_spots") then
+			warfare_log.info("modxml_warfare_patch_map_spots: injecting outline map spots into %s", tostring(xml_file_name))
+
+			local factions = {
+				"stalker", "bandit", "csky", "army", "freedom", "dolg",
+				"ecolog", "killer", "monolith", "renegade", "greh", "isg", "zombied",
+			}
+
+			local states = {
+				target   = { 255,  60,  60 },    -- red:    under active attack
+				planned  = { 255, 225,  40 },    -- yellow: planned attack target
+				invasion = { 255, 140,  40 },    -- orange: imminent invasion target
+			}
+
+			-- Resolve each faction's real icon texture by reading its circle_<faction>_spot, so
+			-- the outline always mirrors whatever icon is actually shown. Most factions use the
+			-- ui_mm_faction_<faction> atlas entry (no sub-rect). Factions with no real emblem
+			-- (zombied) resolve to the generic ui\ui_common disc and get the solid ring fallback
+			-- below instead. Falls back to the atlas id when the icon spot isn't present in this
+			-- particular map_spots file.
+			local function spot_texture(spot, default_name, default_rect)
+				local name, rect = default_name, default_rect
+				local res = xml_obj:query(spot .. " > texture")
+				if res and res[1] then
+					local t = xml_obj:getText(res[1])
+					if t and t ~= "" then name = t end
+					local a = xml_obj:getElementAttr(res[1]) or {}
+					if a.x and a.width then
+						rect = string.format([[ x="%s" y="%s" width="%s" height="%s"]],
+							a.x, a.y or 0, a.width, a.height or a.width)
+					end
+				end
+				return name, rect
+			end
+
+			local icon_tex = {}
+			for _, faction in ipairs(factions) do
+				local name, rect = spot_texture("circle_" .. faction .. "_spot", "ui_mm_faction_" .. faction, "")
+				-- Some factions (e.g. zombied) have no real emblem and fall back to the generic
+				-- ui\ui_common disc, which is a semi-transparent "ghost" (alpha peaks ~63%): a
+				-- silhouette of it renders as a faint, half-transparent blob. For those, draw a
+				-- dedicated solid ring texture instead (its alpha channel IS the ring shape, full
+				-- frame), giving a clean opaque ring. A mod that supplies a real opaque emblem keeps
+				-- the mirrored silhouette path automatically.
+				local norm = name:lower():gsub("/", "\\")
+				local ring_name, ring_rect = name, rect
+				if norm == [[ui\ui_common]] then
+					ring_name = [[ui\ui_warfare_outline_ring]]
+					ring_rect = ""
+				end
+				icon_tex[faction] = { name = name, rect = rect, ring_name = ring_name, ring_rect = ring_rect }
+			end
+
+			-- one outline spot per (state, faction): the faction silhouette in the state colour,
+			-- enlarged and behind the icon (no pointer -- the natural icon already carries one)
+			for state, clr in pairs(states) do
+				for _, faction in ipairs(factions) do
+					local it = icon_tex[faction]
+					local texture_el = string.format(
+						[[<texture shader="hud\font" r="%s" g="%s" b="%s"%s>%s</texture>]],
+						clr[1], clr[2], clr[3], it.ring_rect, it.ring_name)
+
+					local outline_xml = string.format([[
+<circle_%s_%s>
+	<level_map spot="circle_%s_%s_spot"/>
+</circle_%s_%s>
+<circle_%s_%s_spot x="0" y="0" width="%s" height="%s" alignment="c" scale="1" scale_min="1" scale_max="1" stretch="1" location_level="-1">
+	%s
+</circle_%s_%s_spot>
+					]],
+						state, faction,
+						state, faction,
+						state, faction,
+						state, faction, OUTLINE_SIZE, OUTLINE_SIZE,
+						texture_el,
+						state, faction)
+
+					xml_obj:insertFromXMLString(outline_xml)
+				end
+			end
+
+			-- one stale spot per faction: the real icon, faded, same footprint and pointer as the
+			-- live icon since it stands alone on the smart
+			for _, faction in ipairs(factions) do
+				local it = icon_tex[faction]
+				xml_obj:insertFromXMLString(string.format([[
+<circle_stale_%s>
+	<level_map spot="circle_stale_%s_spot" pointer="quest_pointer"/>
+</circle_stale_%s>
+<circle_stale_%s_spot x="0" y="0" width="%s" height="%s" alignment="c" scale="1" scale_min="1" scale_max="1" stretch="1">
+	<texture shader="hud\faded" r="%s" g="%s" b="%s" a="%s"%s>%s</texture>
+</circle_stale_%s_spot>
+				]],
+					faction, faction, faction,
+					faction, ICON_SIZE, ICON_SIZE,
+					STALE_TINT[1], STALE_TINT[2], STALE_TINT[3], STALE_A, it.rect, it.name,
+					faction))
+			end
+
+			local command_spots = {
+				{ name = "warfare_controlled", clr = { 255, 225,  40 }, lvl = 3 }, -- yellow
+				{ name = "warfare_selected",   clr = { 255, 140,  40 }, lvl = 4 }, -- orange
+			}
+			-- Per-detachment rings warfare_det_1..10: a 10-way categorical palette (Trubetskoy
+			-- "distinct colours"), deliberately avoiding yellow/orange so a detachment ring is not
+			-- confused with controlled/selected.
+			local det_palette = {
+				{ 230,  25,  75 }, -- 1 red
+				{  60, 180,  75 }, -- 2 green
+				{   0, 130, 200 }, -- 3 blue
+				{ 240,  50, 230 }, -- 4 magenta
+				{  70, 240, 240 }, -- 5 cyan
+				{ 145,  30, 180 }, -- 6 purple
+				{   0, 128, 128 }, -- 7 teal
+				{ 250, 190, 212 }, -- 8 pink
+				{ 220, 190, 255 }, -- 9 lavender
+				{ 170, 110,  40 }, -- 10 brown
+			}
+			for slot, clr in ipairs(det_palette) do
+				command_spots[#command_spots + 1] = { name = "warfare_det_" .. slot, clr = clr, lvl = 3 }
+			end
+			for _, s in ipairs(command_spots) do
+				local spot_xml = string.format([[
+<%s>
+	<level_map spot="%s_spot"/>
+</%s>
+<%s_spot x="0" y="0" width="22" height="22" alignment="c" stretch="1" location_level="%s">
+	<texture r="%s" g="%s" b="%s">ui\ui_warfare_outline_ring</texture>
+</%s_spot>
+				]],
+					s.name, s.name, s.name,
+					s.name, s.lvl,
+					s.clr[1], s.clr[2], s.clr[3],
+					s.name)
+				xml_obj:insertFromXMLString(spot_xml)
+			end
+
+			-- Markers placed on smart ids for the point-selection system (warfare_squad_command).
+			-- Selected base (blue): a plain ring (the same ui\ui_warfare_outline_ring used by the
+			-- command rings), drawn a touch larger than the red target rings to read as distinct.
+			xml_obj:insertFromXMLString([[
+<warfare_point_selected>
+	<level_map spot="warfare_point_selected_spot" pointer="quest_pointer2"/>
+</warfare_point_selected>
+<warfare_point_selected_spot width="30" height="30" stretch="1" alignment="c" location_level="5">
+	<texture r="0" g="130" b="255">ui\ui_warfare_outline_ring</texture>
+</warfare_point_selected_spot>
+			]])
+
+			-- Attack-target bases (red): a plain red ring (the same ui\ui_warfare_outline_ring used
+			-- by the command rings), not a crosshair.
+			xml_obj:insertFromXMLString([[
+<warfare_point_target>
+	<level_map spot="warfare_point_target_spot" pointer="quest_pointer2"/>
+</warfare_point_target>
+<warfare_point_target_spot width="28" height="28" stretch="1" alignment="c" location_level="5">
+	<texture r="255" g="60" b="60">ui\ui_warfare_outline_ring</texture>
+</warfare_point_target_spot>
+			]])
+		end
+	end)
+end

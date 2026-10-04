@@ -1,0 +1,43 @@
+local TAB = "eptZfFront"
+local BUTTON = [[
+<button x="%d" y="0" width="89" height="27" id="eptZfFront" frame_mode="0">
+	<text align="c" vert_align="c" x="0" y="0" font="letterica16">zf_pda_tab</text>
+	<texture>ui_inGame2_pda_button</texture>
+	<text_color>
+		<t r="255" g="255" b="255"/>
+		<d r="255" g="255" b="255"/>
+		<e r="200" g="200" b="200"/>
+		<h r="170" g="170" b="170"/>
+	</text_color>
+</button>
+]]
+local function patch(xml_obj)
+    local tab = xml_obj:query("tab")[1]
+    if not tab or xml_obj:query("tab > button[id=" .. TAB .. "]")[1] then return end
+    local buttons = xml_obj:query("tab > button")
+    local last = 0
+    for _, b in ipairs(buttons) do
+        last = math.max(last, tonumber(xml_obj:getElementAttr(b).x) or 0)
+    end
+    local a = xml_obj:getElementAttr(tab)
+    local x, w = tonumber(a.x) or 132, tonumber(a.width) or 550
+    xml_obj:setElementAttr(tab, { x = x - 78, width = w + 78 })
+    for _, fl in ipairs(xml_obj:query("background_static > auto_frameline")) do
+        local fa = xml_obj:getElementAttr(fl)
+        if tonumber(fa.x) and tonumber(fa.x) < 100 and tonumber(fa.width) and tonumber(fa.width) > 78 then
+            xml_obj:setElementAttr(fl, { width = tonumber(fa.width) - 78 })
+            break
+        end
+    end
+    xml_obj:insertFromXMLString(string.format(BUTTON, last + 78), tab)
+    local cap = xml_obj:query("caption_static")[1]
+    if cap then xml_obj:setElementAttr(cap, { x = -2000 }) end
+end
+function on_xml_read()
+    RegisterScriptCallback("on_xml_read", function(xml_file_name, xml_obj)
+        if xml_file_name == [[ui\pda.xml]] or xml_file_name == [[ui\pda_16.xml]] then
+            local ok, err = pcall(patch, xml_obj)
+            if not ok then printf("![ZF] PDA tab button: %s", tostring(err)) end
+        end
+    end)
+end

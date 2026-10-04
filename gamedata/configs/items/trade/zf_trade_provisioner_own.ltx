@@ -1,0 +1,16 @@
+#include "presets\trade_discounts.ltx"
+#include "presets\trade_presets.ltx"
+#include "zf_stock_provisioner.ltx"
+[zf_discount_exotic]
+buy = 0.3
+sell = 1.8
+[trader]
+buy_condition = zf_buy_provisioner
+sell_condition = zf_sell_provisioner
+buy_supplies = {=zf_trader_tier(3)} zf_stock_provisioner_3, {=zf_trader_tier(2)} zf_stock_provisioner_2, zf_stock_provisioner_1
+buy_item_condition_factor = 0.6
+buy_item_exponent = 2.0
+sell_item_exponent = 0.8
+discounts = discount_barman
+zf_type = provisioner
+zf_scope = own

@@ -1,0 +1,514 @@
+local C = zf_core
+local E = zf_encounters
+local NO_SURRENDER = { monolith = true, greh = true, zombied = true }
+local function events()
+    return C.store("events")
+end
+local talks = {}
+local deserter = {}
+local player_ids = {}
+local function on_enemy_eval(obj, enemy, flags)
+    if next(talks) == nil and next(deserter) == nil then return end
+    if flags.override and flags.result then return end
+    local a, b = obj:id(), enemy:id()
+    local ka = talks[a]
+    if (ka and ka == talks[b])
+        or (deserter[a] and player_ids[b]) or (deserter[b] and player_ids[a]) then
+        flags.override, flags.result = true, false
+    end
+end
+local function alive(id)
+    local se = id and alife_object(id)
+    return se ~= nil and C.creature(id) ~= nil
+end
+local function live_squad(id)
+    local sq = id and alife_object(id)
+    return sq and sq:clsid() == clsid.online_offline_group_s and sq:npc_count() > 0 and sq or nil
+end
+local function members(sq, fn)
+    for m in sq:squad_members() do fn(m.id) end
+end
+local function player_near(sm, r)
+    local lid = C.smart_level(sm)
+    for _, p in ipairs(C.players()) do
+        if C.player_level(p) == lid and p:position():distance_to(sm.position) < r then return true end
+    end
+    return false
+end
+local function around(sm)
+    local out = {}
+    for _, o in ipairs(C.smarts_on_level(C.smart_level(sm))) do
+        local d = o.id ~= sm.id and o.position:distance_to(sm.position)
+        if d and d >= 120 and d <= 350 then out[#out + 1] = o end
+    end
+    return out
+end
+local function at_venue(sq, venue)
+    if sq.current_target_id ~= venue.id then return false end
+    if sq.current_action == 1 then return true end
+    local p, q = C.gpos(sq), C.smart_gpos(venue)
+    return p ~= nil and q ~= nil and C.d2(p, q) <= 40 * 40
+end
+local function start_delegation(ctx)
+    local a = E.pick(E.factions(C.human))
+    local b = a and E.pick(E.factions(function(f) return C.human(f) and f ~= a end))
+    local venue = b and E.quiet(E.wide(ctx, 150, C.cfg("delegation_dist", 700)), { [a] = true, [b] = true })
+    local from_a = venue and E.far(ctx, venue)
+    local from_b = from_a and E.across(ctx, from_a)
+    if not (from_b and from_b.id ~= venue.id) then return false end
+    local out = {}
+    local sa = E.squad(out, E.squad_section(a, "veteran"), from_a, venue)
+    local sb = E.squad(out, E.squad_section(b, "veteran"), from_b, venue)
+    E.track("delegation", out, 12)
+    if not (sa and sb) then return false end
+    C.shield(sa, 12, "watch")
+    C.shield(sb, 12, "watch")
+    C.spare(sa.id, 12)
+    C.spare(sb.id, 12)
+    events()["delegation_" .. C.now()] = { kind = "delegation", a = a, b = b, war = C.enemies(a, b),
+        venue = venue.id, sa = sa.id, sb = sb.id, phase = "travel", at = C.now() + 2 * C.HOUR }
+    C.log("delegation: %s and %s meet at %s", a, b, venue:name())
+    C.note("event", { a, b }, C.text("zf_j_delegation", nil, C.faction_name(a), C.faction_name(b), C.smart_name(venue)))
+    return true
+end
+local function send_hit_team(e, venue)
+    local c = C.human("killer") and not C.friends("killer", e.a) and not C.friends("killer", e.b) and "killer"
+    if not c then
+        c = E.pick(E.factions(function(f) return C.enemies(f, e.a) and C.enemies(f, e.b) end))
+    end
+    local spot = c and E.pick(around(venue))
+    if not spot then return end
+    local out = {}
+    E.squad(out, E.squad_section(c, (c == "army" or c == "monolith") and "sniper" or "veteran"), spot, venue)
+    if #out == 0 then return end
+    E.track("assassins", out, 6)
+    e.c, e.hit = c, { out[1].id }
+    C.feud(out[1].id, e.sa, 6)
+    C.feud(out[1].id, e.sb, 6)
+    for _, id in ipairs({ e.sa, e.sb }) do
+        C.shield_allow(id, out[1].id)
+        C.shield_allow(out[1].id, id)
+    end
+    C.log("delegation at %s: %s hit team on its way", venue:name(), c)
+end
+local function finish_delegation(key, e, how)
+    events()[key] = nil
+    for id, k in pairs(talks) do
+        if k == key then talks[id] = nil end
+    end
+    for _, id in pairs({ e.la, e.lb }) do
+        local npc = C.wears(id) and level.object_by_id(id)
+        if npc then C.restore_logic(npc) end
+    end
+    for _, id in ipairs({ e.sa, e.sb }) do
+        local sq = live_squad(id)
+        if sq then C.send_home(sq, 4) end
+    end
+    local venue = alife_object(e.venue)
+    if not venue or how == "timeout" or how == "gone" then return end
+    local v, fa, fb = C.smart_name(venue), C.faction_name(e.a), C.faction_name(e.b)
+    local loud = C.relevant(venue, e.a, e.b)
+    if how == "killed" then
+        if e.c and math.random() < 0.5 then
+            zf_diplomacy.apply(e.a, e.c, -700)
+            zf_diplomacy.apply(e.b, e.c, -700)
+            C.report("event", { e.a, e.b, e.c }, loud, "zf_ev_assassination_c", nil, "danger", v, fa, fb, C.faction_name(e.c))
+        else
+            zf_diplomacy.apply(e.a, e.b, -900)
+            C.report("event", { e.a, e.b }, loud, "zf_ev_assassination", nil, "danger", v, fa, fb)
+        end
+    elseif e.hit and not live_squad(e.hit[1]) then
+        zf_diplomacy.apply(e.a, e.b, 500)
+        C.report("event", { e.a, e.b }, loud, "zf_ev_foiled", nil, "news", v, fa, fb)
+    elseif math.random() < 0.75 then
+        zf_diplomacy.apply(e.a, e.b, e.war and 450 or 300)
+        C.report("event", { e.a, e.b }, loud, "zf_ev_agreement", nil, "news", fa, fb, v)
+    else
+        zf_diplomacy.apply(e.a, e.b, -150)
+        C.report("event", { e.a, e.b }, loud, "zf_ev_breakdown", nil, "news", fa, fb, v)
+    end
+    C.log("delegation %s/%s at %s ended: %s", e.a, e.b, venue:name(), how)
+end
+local function step_delegation(key, e)
+    local sa, sb, venue = live_squad(e.sa), live_squad(e.sb), alife_object(e.venue)
+    if not (sa and sb and venue) then
+        return finish_delegation(key, e, e.phase == "talk" and "killed" or "gone")
+    end
+    members(sa, function(id) talks[id] = key end)
+    members(sb, function(id) talks[id] = key end)
+    for _, sq in ipairs({ sa, sb }) do
+        if sq.assigned_target_id ~= e.venue then C.send(sq, e.venue, 2) end
+    end
+    if e.phase == "travel" then
+        if C.now() > e.at then return finish_delegation(key, e, "timeout") end
+        local la, lb = level.object_by_id(sa:commander_id()), level.object_by_id(sb:commander_id())
+        local r = C.cfg("talk_radius", 30)
+        local near = la and lb and la:position():distance_to(venue.position) < r and lb:position():distance_to(venue.position) < r
+        if near or (not la and not lb and at_venue(sa, venue) and at_venue(sb, venue)) then
+            e.phase, e.la, e.lb = "talk", sa:commander_id(), sb:commander_id()
+            e.at = C.now() + C.rand(C.cfg("talk_min", 20), C.cfg("talk_max", 40)) * 60
+            if la then C.set_logic(la, "remark@zf_talk") end
+            if lb then C.set_logic(lb, "remark@zf_talk") end
+            C.report("event", { e.a, e.b }, C.relevant(venue, e.a, e.b), "zf_ev_talks", nil, "news",
+                C.faction_name(e.a), C.faction_name(e.b), C.smart_name(venue))
+            e.plot = math.random() < C.cfg("assassin_chance", 0.35)
+        end
+    elseif e.phase == "talk" then
+        if not (alive(e.la) and alive(e.lb)) then return finish_delegation(key, e, "killed") end
+        if C.now() > e.at then return finish_delegation(key, e, "done") end
+        if e.plot and not e.hit and player_near(venue, C.cfg("assassin_watch_dist", 300)) then send_hit_team(e, venue) end
+        for _, id in ipairs({ e.la, e.lb }) do
+            local npc = level.object_by_id(id)
+            if npc then C.ensure_logic(npc, "remark@zf_talk") end
+        end
+    end
+end
+local function start_prisoners(ctx)
+    local b = E.pick(E.factions(C.human))
+    local a = b and E.pick(E.factions(function(f) return C.human(f) and not NO_SURRENDER[f] and C.enemies(f, b) end))
+    local at = a and E.quiet(ctx.far, { [a] = true, [b] = true })
+    if not at then return false end
+    events()["prisoners_" .. C.now()] = { kind = "prisoners", a = a, b = b, at_smart = at.id,
+        phase = "wait", until_t = C.now() + 3 * C.HOUR }
+    return true
+end
+local function step_prisoners(key, e)
+    local at = alife_object(e.at_smart)
+    if not at or C.now() > e.until_t then
+        events()[key] = nil
+        return
+    end
+    if e.phase == "wait" then
+        local near = false
+        for _, p in ipairs(C.players()) do
+            if C.player_level(p) == C.smart_level(at) and p:position():distance_to(at.position) < C.cfg("event_spawn_dist", 150) then
+                near = true
+            end
+        end
+        if not near then return end
+        local out = {}
+        local sa = E.squad(out, E.squad_section(e.a, "novice"), at, at)
+        local sb = E.squad(out, E.squad_section(e.b, "advanced"), at, at)
+        E.track("prisoners", out, 4)
+        if not (sa and sb) then
+            events()[key] = nil
+            return
+        end
+        e.sa, e.sb, e.phase = sa.id, sb.id, "guard"
+        C.spare(sa.id, 4)
+        C.spare(sb.id, 4)
+        C.report("event", { e.a, e.b }, C.friends(e.a, warfare.actor_faction), "zf_ev_prisoners", e.a, "danger",
+            C.smart_name(at), C.faction_name(e.b))
+        C.log("prisoners: %s holds %s at %s", e.b, e.a, at:name())
+    end
+    local sa = live_squad(e.sa)
+    if not sa then
+        events()[key] = nil
+        return
+    end
+    members(sa, function(id)
+        talks[id] = key
+        local npc = level.object_by_id(id)
+        if npc and npc:alive() and not zf_captive.is_captive(id) then
+            zf_captive.surrender(npc, e.b, e.until_t)
+        end
+    end)
+    local sb = live_squad(e.sb)
+    if sb then members(sb, function(id) talks[id] = key end) end
+    for _, sq in ipairs({ sa, sb }) do
+        if sq and sq.assigned_target_id ~= e.at_smart then C.send(sq, e.at_smart, 2) end
+    end
+end
+local function start_deserters(ctx)
+    local a = E.pick(E.factions(function(f) return C.human(f) and not NO_SURRENDER[f] and C.enemies(f, ctx.af) end))
+    if not a then return false end
+    local out = {}
+    local sq = E.squad(out, E.squad_section(a, "novice"), E.far(ctx), ctx.target)
+    E.track("deserters", out, 4)
+    if not sq then return false end
+    C.shield(sq, 4, "watch")
+    C.spare(sq.id, 4)
+    events()["deserters_" .. C.now()] = { kind = "deserters", a = a, sq = sq.id, until_t = C.now() + 4 * C.HOUR }
+    C.report("event", a, math.random() < 0.5, "zf_ev_deserters", a, "news", C.smart_name(ctx.target))
+    C.log("deserters: %s squad heading to %s", a, ctx.target:name())
+    return true
+end
+local function step_deserters(key, e)
+    local sq = live_squad(e.sq)
+    if not sq or C.now() > e.until_t then
+        events()[key] = nil
+        return
+    end
+    local men = {}
+    members(sq, function(id)
+        deserter[id] = true
+        men[#men + 1] = level.object_by_id(id)
+    end)
+    for _, p in ipairs(C.players()) do
+        for _, npc in ipairs(men) do
+            if npc and npc:alive() and p:position():distance_to(npc:position()) < C.cfg("deserter_dist", 25) then
+                local captor = C.community(p)
+                for _, m in ipairs(men) do
+                    if m and m:alive() and not zf_captive.is_captive(m:id()) then zf_captive.surrender(m, captor) end
+                end
+                events()[key] = nil
+                C.log("deserters of %s gave up to a player", e.a)
+                return
+            end
+        end
+    end
+end
+local function trouble(at, f, region, out, foes)
+    local from = E.pick(around(at))
+    if not from then return end
+    local hf = E.pick(E.factions(function(x) return (x == "bandit" or x == "renegade") and C.enemies(x, f) end))
+    if hf and math.random() < 0.5 then
+        local s = E.squad(out, E.squad_section(hf, "novice"), from, at)
+        for _, id in ipairs(s and foes or {}) do C.feud(s.id, id, 3) end
+    else
+        E.squad(out, E.mutant({ region = region or "mid" }, warfare_utils.is_night()), from, at)
+    end
+end
+local function start_wounded(ctx)
+    local f = E.pick(E.factions(function(x) return not C.enemies(x, ctx.af) end))
+    local at = f and E.quiet(ctx.far, { [f] = true })
+    if not at then return false end
+    events()["wounded_" .. C.now()] = { kind = "wounded", a = f, at_smart = at.id, region = ctx.region,
+        phase = "wait", until_t = C.now() + 3 * C.HOUR }
+    return true
+end
+local function strip_meds(npc)
+    local ids = {}
+    npc:iterate_inventory(function(_, item)
+        local s = item:section()
+        if s:find("medkit", 1, true) or s:find("bandage", 1, true) or s:find("stimpack", 1, true) then
+            ids[#ids + 1] = item:id()
+        end
+    end, npc)
+    for _, id in ipairs(ids) do alife_release_id(id) end
+end
+local function step_wounded(key, e)
+    local at = alife_object(e.at_smart)
+    if not at or C.now() > e.until_t then
+        events()[key] = nil
+        return
+    end
+    if e.phase == "wait" then
+        if not player_near(at, C.cfg("event_spawn_dist", 150) + 100) then return end
+        local out = {}
+        local sq = E.squad(out, E.squad_section(e.a, "novice"), at, at)
+        if not sq then
+            events()[key] = nil
+            return
+        end
+        E.trim(sq, 1)
+        C.shield(sq, 3, "watch")
+        C.spare(sq.id, 3)
+        if math.random() < 0.4 then trouble(at, e.a, e.region, out, { sq.id }) end
+        E.track("wounded", out, 3)
+        e.sq, e.id, e.phase = sq.id, sq:commander_id(), "hurt"
+        C.report("event", e.a, true, "zf_ev_wounded", e.a, "danger", C.smart_name(at))
+        return
+    end
+    local se = C.creature(e.id)
+    if not (se and se.group_id == e.sq) then
+        C.note("event", e.a, C.text("zf_j_wounded_died", nil, C.faction_name(e.a), C.smart_name(at)))
+        events()[key] = nil
+        return
+    end
+    local npc = level.object_by_id(e.id)
+    if not npc then return end
+    if e.phase == "hurt" then
+        strip_meds(npc)
+        npc:set_health_ex(0.1)
+        e.phase = "down"
+    elseif e.phase == "down" and not xr_wounded.is_wounded(npc) and npc.health > 0.3 then
+        local p = e.healer and C.player_by_key(e.healer)
+        if p then
+            C.reward(p, C.rand(800, 2500), "zf_ev_wounded_thanks")
+            zf_diplomacy.apply(e.a, warfare.actor_faction, 100)
+        end
+        C.note("event", e.a, C.text("zf_j_wounded_saved", nil, C.faction_name(e.a), C.smart_name(at)))
+        local sq = live_squad(e.sq)
+        if sq then C.send_home(sq, 6) end
+        events()[key] = nil
+    end
+end
+local function credit_healer(npc)
+    if not (npc and C.active()) then return end
+    local who
+    if _G.xrr_quest_accept_conn then
+        who = C.peer_key(_G.xrr_quest_accept_conn)
+    else
+        local ok, talking = pcall(db.actor.is_talking, db.actor)
+        if ok and talking then who = "host" end
+    end
+    if not who then return end
+    for _, e in pairs(events()) do
+        if e.kind == "wounded" and e.id == npc:id() then e.healer = who end
+    end
+end
+local function hook_heal()
+    local w = xr_wounded
+    if not (w and w.unlock_medkit) or w.__zf_heal then return end
+    w.__zf_heal = true
+    local orig = w.unlock_medkit
+    w.unlock_medkit = function(npc, ...)
+        local ok, err = pcall(credit_healer, npc)
+        if not ok then C.warn("wounded healer: %s", err) end
+        return orig(npc, ...)
+    end
+end
+local function start_defector(ctx)
+    local a = E.pick(E.factions(function(f) return C.human(f) and not NO_SURRENDER[f] and C.enemies(f, ctx.af) end))
+    local from = a and E.far(ctx)
+    if not from then return false end
+    local out = {}
+    local sq = E.squad(out, E.squad_section(a, "advanced"), from, ctx.target)
+    E.track("defector", out, 4)
+    if not sq then return false end
+    E.trim(sq, 1)
+    C.shield(sq, 4, "watch")
+    C.spare(sq.id, 4)
+    events()["defector_" .. C.now()] = { kind = "defector", a = a, sq = sq.id, until_t = C.now() + 4 * C.HOUR }
+    C.report("event", a, true, "zf_ev_defector", nil, "news", C.faction_name(a), C.smart_name(ctx.target))
+    C.log("defector of %s heading to %s", a, ctx.target:name())
+    return true
+end
+local function step_defector(key, e)
+    local sq = live_squad(e.sq)
+    if not sq or C.now() > e.until_t then
+        events()[key] = nil
+        return
+    end
+    members(sq, function(id) deserter[id] = true end)
+    local npc = level.object_by_id(sq:commander_id())
+    if not (npc and npc:alive()) then return end
+    for _, p in ipairs(C.players()) do
+        if p:position():distance_to(npc:position()) < C.cfg("deserter_dist", 25) then
+            if zf_captive.surrender(npc, C.community(p)) then zf_captive.mark_informant(npc:id()) end
+            events()[key] = nil
+            C.log("defector of %s gave himself up", e.a)
+            return
+        end
+    end
+end
+local function start_scientists(ctx)
+    if not C.human("ecolog") or C.enemies("ecolog", ctx.af) then return false end
+    local at = E.quiet(ctx.far, { ecolog = true })
+    local from = at and (E.far(ctx, at) or at)
+    if not from then return false end
+    local out = {}
+    local sci = E.squad(out, E.squad_section("ecolog", "novice"), from, at)
+    local gf = E.pick(E.factions(function(f) return f ~= "ecolog" and C.friends(f, "ecolog") end)) or "stalker"
+    local guard = C.human(gf) and E.squad(out, E.squad_section(gf, "advanced"), from, at)
+    E.track("scientists", out, 4)
+    if not sci then return false end
+    C.shield(sci, 4, "watch")
+    C.spare(sci.id, 4)
+    if guard then
+        C.shield(guard, 4, "watch")
+        C.spare(guard.id, 4)
+    end
+    events()["scientists_" .. C.now()] = { kind = "scientists", sq = sci.id, guard = guard and guard.id or nil,
+        at_smart = at.id, region = ctx.region, phase = "travel", until_t = C.now() + 3 * C.HOUR }
+    C.report("event", "ecolog", true, "zf_ev_scientists", "ecolog", "news", C.smart_name(at))
+    return true
+end
+local function step_scientists(key, e)
+    local sq, at = live_squad(e.sq), alife_object(e.at_smart)
+    if not (sq and at) then
+        if at and e.phase ~= "travel" then
+            C.report("event", "ecolog", C.relevant(at, "ecolog"), "zf_ev_scientists_lost", "ecolog", "danger", C.smart_name(at))
+        end
+        events()[key] = nil
+        return
+    end
+    for _, id in ipairs({ e.sq, e.guard }) do
+        local s = live_squad(id)
+        if s and s.assigned_target_id ~= e.at_smart then C.send(s, e.at_smart, 2) end
+    end
+    local l = level.object_by_id(sq:commander_id())
+    if e.phase == "travel" then
+        if l and l:position():distance_to(at.position) < 40 then
+            e.phase, e.done_t, e.work_t = "work", C.now() + C.rand(30, 50) * 60, C.now()
+            if math.random() < 0.6 then e.attack_t = C.now() + C.rand(5, 15) * 60 end
+        elseif C.now() > e.until_t then
+            events()[key] = nil
+        end
+        return
+    end
+    if l and C.can_act(l) and math.random() < 0.5 then C.act(l, "remark@zf_probe", 30) end
+    local t = C.now()
+    local near = l and select(2, C.nearest_player(l:position(), C.player_level(l)))
+    if near and near < 120 then e.seen = (e.seen or 0) + (t - (e.last or t)) end
+    e.last = t
+    if e.attack_t and C.now() >= e.attack_t then
+        e.attack_t = nil
+        local out = {}
+        trouble(at, "ecolog", e.region, out, { e.sq, e.guard })
+        if #out > 0 then
+            E.track("scientists_t", out, 3)
+            C.report("event", "ecolog", true, "zf_ev_scientists_attack", "ecolog", "danger", C.smart_name(at))
+        end
+    end
+    if C.now() >= e.done_t then
+        local p, d
+        if l then p, d = C.nearest_player(l:position(), C.player_level(l)) end
+        local stood_by = (e.seen or 0) >= 0.5 * (e.done_t - (e.work_t or e.done_t))
+        if p and d < 120 and stood_by then
+            C.reward(p, C.rand(2000, 4500), "zf_ev_scientists_pay")
+            zf_diplomacy.apply("ecolog", warfare.actor_faction, 150)
+        end
+        C.report("event", "ecolog", true, "zf_ev_scientists_done", "ecolog", "news", C.smart_name(at))
+        C.send_home(sq, 6)
+        local g = live_squad(e.guard)
+        if g then C.send_home(g, 6) end
+        events()[key] = nil
+    end
+end
+function waiting()
+    local out = {}
+    for _, e in pairs(events()) do
+        if e.phase == "wait" and e.at_smart then
+            out[#out + 1] = { id = e.at_smart, sid = e.at_smart, tag = e.kind, f = e.a }
+        end
+    end
+    return out
+end
+local STEP = { delegation = step_delegation, prisoners = step_prisoners, deserters = step_deserters,
+    wounded = step_wounded, defector = step_defector, scientists = step_scientists }
+local START = { delegation = start_delegation, prisoners = start_prisoners, deserters = start_deserters,
+    wounded = start_wounded, defector = start_defector, scientists = start_scientists }
+local function run()
+    talks, deserter, player_ids = {}, {}, {}
+    for _, p in ipairs(C.players()) do player_ids[p:id()] = true end
+    local n = 0
+    for key, e in pairs(events()) do
+        n = n + 1
+        local ok, err = pcall(STEP[e.kind], key, e)
+        if not ok then
+            C.warn("event %s: %s", e.kind, err)
+            events()[key] = nil
+        end
+    end
+    if n >= C.cfg("event_max_active", 1) or not C.ready("event") or C.crowded() then return end
+    if math.random() > C.cfg("event_chance", 0.35) then
+        C.cooldown("event", 0.25)
+        return
+    end
+    local ctx = E.context()
+    if not ctx then return end
+    local kind = C.weighted({ delegation = C.cfg("event_w_delegation", 5),
+        prisoners = C.cfg("event_w_prisoners", 3), deserters = C.cfg("event_w_deserters", 3),
+        wounded = C.cfg("event_w_wounded", 3), defector = C.cfg("event_w_defector", 2),
+        scientists = C.cfg("event_w_scientists", 2) })
+    if kind and START[kind](ctx) then
+        C.cooldown("event", C.cfg("event_cooldown_h", 4) * C.rand(0.6, 1.4))
+    end
+end
+function on_game_start()
+    hook_heal()
+    RegisterScriptCallback("on_enemy_eval", on_enemy_eval)
+    C.every("zf_events", 10, run)
+end

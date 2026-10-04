@@ -1,0 +1,475 @@
+local old_ui_options_init_opt_coder = ui_options.init_opt_coder
+function ui_options.init_opt_coder()
+    warfare_log.debug("modxml_warfare.init_opt_coder: injecting warfare options into MCM tree")
+    local alife_options_index = 5
+    local alife_general_options_index = 1
+    local alife_general_alife_mutant_pop_index = 2
+    local alife_general_alife_stalker_pop_index = 3
+    local alife_warfare_options_index = 3
+    local alife_warfare_general_options_index = 1
+    local alife_warfare_azazel_options_index = 2
+    local alife_warfare_stalker_options_index = 3
+
+    old_ui_options_init_opt_coder()
+
+    local alife_general_options = ui_options.options[alife_options_index].gr[alife_general_options_index]
+    local alife_general_alife_mutant_pop = alife_general_options.gr[alife_general_alife_mutant_pop_index]
+    alife_general_alife_mutant_pop.def = 1.5
+    table.insert(alife_general_alife_mutant_pop.content, { 1.5 })
+    table.insert(alife_general_alife_mutant_pop.content, { 2 })
+    table.insert(alife_general_alife_mutant_pop.content, { 3 })
+    local alife_general_alife_stalker_pop = alife_general_options.gr[alife_general_alife_stalker_pop_index]
+    alife_general_alife_stalker_pop.def = 1
+    table.insert(alife_general_alife_stalker_pop.content, { 1.5 })
+    table.insert(alife_general_alife_stalker_pop.content, { 2 })
+
+    local options = modxml_warfare_ui.build_sections({
+        -- The behavior traits. Every row is checked against warfare_behavior.TRAITS after
+        -- build_sections. Defaults here are placeholders -- the real per-faction default is stamped
+        -- onto each faction's own copy of the row further down.
+        { id = "faction_behavior", featured = { "behavior_preset" }, rows = {
+            -- Stored base for the traits below; modxml_warfare_behavior_presets stamps and labels it.
+            { id = "behavior_preset", type = "list", val = 0, def = "lore", content = {
+                { "lore", "wf_preset_lore" }, { "generic", "wf_preset_generic" } } },
+            { id = "dispatch_model", type = "list", val = 0, def = "unified", content = {
+                { "unified", "wf_dispatch_unified" }, { "loner", "wf_dispatch_loner" }, { "ecolog", "wf_dispatch_ecolog" } } },
+            { id = "holdings_are_open", type = "check", val = 1, def = false },
+            { id = "displaceable_at_peace", type = "check", val = 1, def = false },
+            { id = "holds_ground", type = "check", val = 1, def = true },
+            { id = "no_central_command", type = "check", val = 1, def = false },
+            { id = "no_intel_exchange", type = "check", val = 1, def = false },
+            { id = "peacetime_appetite", type = "list", val = 0, def = "reluctant", content = {
+                { "never", "wf_appetite_never" }, { "reluctant", "wf_appetite_reluctant" },
+                { "willing", "wf_appetite_willing" }, { "indifferent", "wf_appetite_indifferent" } } },
+            { id = "scorcher_travel", type = "list", val = 0, def = "zone_and_divide", content = {
+                { "zone_and_divide", "wf_scorcher_blocked" }, { "divide_open", "wf_scorcher_divide_open" },
+                { "exempt", "wf_scorcher_exempt" } } },
+            { id = "ignores_miracle_machine", type = "check", val = 1, def = false },
+            { id = "lab_entrance_appeal", type = "track", val = 2, def = 1, min = 1, max = 20, step = 1 },
+            { id = "patrol_scope", type = "list", val = 0, def = "any", content = {
+                { "any", "wf_patrol_any" }, { "lairs_only", "wf_patrol_lairs" } } },
+        } },
+        { id = "faction_spawning", featured = { "spawn_on_new_game", "min_faction_respawn" }, rows = {
+            { id = "spawn_on_new_game", type = "check", val = 1, def = true },
+            { id = "random_spawn_entries", type = "track", val = 2, def = 1, min = 0, max = 100, step = 1 },
+            { id = "min_faction_respawn", type = "track", val = 2, def = 500, min = 0, max = 20000, step = 50, fmt = "time_dhms" },
+            { id = "random_squad_count", type = "check", val = 1, def = true },
+            { id = "min_random_squad_count", type = "track", val = 2, def = 3, min = 0, max = 10, step = 1 },
+            { id = "max_random_squad_count", type = "track", val = 2, def = 4, min = 0, max = 10, step = 1 },
+        } },
+        { id = "faction_expansion", featured = { "expansion_aggression", "night_activity_chance" }, rows = {
+            { id = "expansion_aggression", type = "track", val = 2, def = 50, min = 0, max = 100, step = 1, fmt = "percent" },
+            { id = "night_activity_chance", type = "track", val = 2, def = 1, min = 0, max = 100, step = 1, fmt = "percent" },
+            { id = "min_smart_targets_per_base", type = "track", val = 2, def = 2, min = 0, max = 10, step = 1 },
+            { id = "max_smart_targets_per_base", type = "track", val = 2, def = 3, min = 0, max = 10, step = 1 },
+            { id = "min_invasion_size", type = "track", val = 2, def = 1, min = 0, max = 5, step = 0.1 },
+            { id = "max_invasion_size", type = "track", val = 2, def = 1.5, min = 0, max = 5, step = 0.1 },
+        } },
+        { id = "faction_targeting", featured = { "linked_level_targeting", "ignore_empty_targets" }, rows = {
+            { id = "linked_level_targeting", type = "check", val = 1, def = true },
+            { id = "ignore_empty_targets", type = "check", val = 1, def = false },
+            { id = "base_priority", type = "track", val = 2, def = 10, min = -100, max = 100, step = 1 },
+            { id = "resource_priority", type = "track", val = 2, def = 5, min = -100, max = 100, step = 1 },
+            { id = "territory_priority", type = "track", val = 2, def = -5, min = -100, max = 100, step = 1 },
+            { id = "lair_priority", type = "track", val = 2, def = -75, min = -100, max = 100, step = 1 },
+            { id = "flag_priority", type = "track", val = 2, def = 1, min = -100, max = 100, step = 1 },
+            { id = "target_on_same_level_priority", type = "track", val = 2, def = 10, min = -100, max = 100, step = 1 },
+            { id = "is_being_targeted_priority", type = "track", val = 2, def = 2, min = -100, max = 100, step = 1 },
+            { id = "target_weaker_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "target_stronger_priority", type = "track", val = 2, def = 1, min = -100, max = 100, step = 1 },
+            { id = "target_faction_weaker_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "target_faction_stronger_priority", type = "track", val = 2, def = 1, min = -100, max = 100, step = 1 },
+            { id = "target_resource_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+        } },
+        { id = "faction_levels", rows = {
+            { id = "lvl_k00_marsh_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_l01_escape_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_k01_darkscape_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_l02_garbage_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_l03_agroprom_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_l04_darkvalley_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_l05_bar_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_l06_rostok_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_l08_yantar_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_l07_military_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_l09_deadcity_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_k02_trucks_cemetery_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_l10_red_forest_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_l10_radar_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_l10_limansk_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_l11_hospital_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_l11_pripyat_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_l12_stancia_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_l12_stancia_2_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_l12u_sarcofag_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_l12u_control_monolith_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_l13_generators_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_zaton_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_jupiter_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_jupiter_underground_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+            { id = "lvl_pripyat_priority", type = "track", val = 2, def = 0, min = -100, max = 100, step = 1 },
+        } },
+        { id = "faction_patrols", featured = { "patrol_squads", "random_patrols" }, rows = {
+            { id = "patrol_squads", type = "track", val = 2, def = 1, min = 0, max = 5, step = 1 },
+            { id = "min_patrol_time", type = "track", val = 2, def = 1000, min = 0, max = 20000, step = 50, fmt = "time_dhms" },
+            { id = "patrol_hunt_chance", type = "track", val = 2, def = 50, min = 0, max = 100, step = 1, fmt = "percent" },
+            { id = "min_patrol_rest_time", type = "track", val = 2, def = 60, min = 0, max = 5000, step = 10, fmt = "time_dhms" },
+            { id = "max_patrol_rest_time", type = "track", val = 2, def = 240, min = 0, max = 5000, step = 10, fmt = "time_dhms" },
+            { id = "random_patrols", type = "check", val = 1, def = false },
+            { id = "max_random_patrols", type = "track", val = 2, def = 15, min = 0, max = 50, step = 1 },
+            { id = "min_random_patrol_time", type = "track", val = 2, def = 500, min = 0, max = 50000, step = 50, fmt = "time_dhms" },
+            { id = "max_random_patrol_time", type = "track", val = 2, def = 10000, min = 0, max = 100000, step = 50, fmt = "time_dhms" },
+        } },
+        { id = "faction_strength", featured = { "offline_power_multiplier" }, rows = {
+            { id = "offline_power_multiplier", type = "track", val = 2, def = 1, min = 0, max = 10, step = 0.1 },
+            { id = "use_bases_not_resources", type = "check", val = 1, def = false },
+            { id = "resource_count_modifier", type = "track", val = 2, def = 0, min = -20, max = 20, step = 1 },
+            { id = "base_count_modifier", type = "track", val = 2, def = 0, min = -20, max = 20, step = 1 },
+        } },
+        { id = "faction_survival", featured = { "keep_last_base" }, rows = {
+            { id = "keep_last_base", type = "check", val = 1, def = false },
+            -- min was 1000, above the 30 G.A.M.M.A. ships. UIOptions:GetValue clamps a stored
+            -- value into the track range before handing it to CacheValue as the "unchanged"
+            -- baseline, so a preset supplying exactly 1000 compared equal to the clamped 30 and
+            -- was never written: the slider read 1000 while ui_options.get returned 30. Matches
+            -- max_resurgence_wait_time, which has always allowed 0.
+            { id = "min_resurgence_wait_time", type = "track", val = 2, def = 10000, min = 0, max = 500000, step = 1000, fmt = "time_dhms" },
+            { id = "max_resurgence_wait_time", type = "track", val = 2, def = 50000, min = 0, max = 1000000, step = 1000, fmt = "time_dhms" },
+            { id = "resurgence_chance", type = "track", val = 2, def = 50, min = 0, max = 100, step = 1, fmt = "percent" },
+        } },
+    }, {
+        { id = "slide_warfare", type = "slide", link = "ui_options_slider_warfare", text = "ui_mm_title_warfare_faction", size = { 512, 50 } },
+    })
+
+    -- Shared by all 13 faction groups, so labels resolve through one hint rather than per-faction paths.
+    for _, row in ipairs(options) do
+        if row.val then
+            row.hint = "alife_warfare_faction_" .. row.id
+        end
+    end
+
+    local CONTROL = { flag = "check", choice = "list", scale = "track" }
+
+    local function row_matches(row, spec)
+        if row.type ~= CONTROL[spec.kind] or row.def ~= spec.neutral then
+            return false
+        end
+        if spec.values then
+            if not row.content or #row.content ~= #spec.values then
+                return false
+            end
+            for i = 1, #spec.values do
+                if row.content[i][1] ~= spec.values[i] then
+                    return false
+                end
+            end
+        end
+        if spec.min ~= nil and (row.min ~= spec.min or row.max ~= spec.max) then
+            return false
+        end
+        return true
+    end
+
+    -- Every trait needs a row, and each trait row must carry the trait's control, default and value set,
+    -- or a faction silently keeps its lore value with no way to change it.
+    local trait_rows = {}
+    for _, row in ipairs(options) do
+        if row.val and warfare_behavior.TRAITS[row.id] then
+            trait_rows[row.id] = true
+            if not row_matches(row, warfare_behavior.TRAITS[row.id]) then
+                error("modxml_warfare: trait row '" .. row.id .. "' does not match warfare_behavior.TRAITS")
+            end
+        end
+    end
+    for _, name in ipairs(warfare_behavior.TRAIT_ORDER) do
+        if not trait_rows[name] then
+            error("modxml_warfare: behavior trait '" .. name .. "' has no MCM row")
+        end
+    end
+
+    local warfare_options = ui_options.options[alife_options_index].gr[alife_warfare_options_index]
+    warfare_options.presets = nil
+    warfare_options.warfare_presets = true
+    warfare_options.gr[alife_warfare_general_options_index] = {
+        id = "general",
+        sh = true,
+        warfare_presets = true,
+        gr = modxml_warfare_ui.build_sections({
+            { id = "world", featured = { "all_out_war", "random_starting_locations" }, rows = {
+                { id = "all_out_war", type = "check", val = 1, def = false },
+                { id = "random_starting_locations", type = "check", val = 1, def = false },
+                { id = "random_starting_character", type = "check", val = 1, def = false },
+                { id = "random_stalker_chance", type = "track", val = 2, def = 50, min = 0, max = 100, step = 1, fmt = "percent" },
+                { id = "random_monster_chance", type = "track", val = 2, def = 50, min = 0, max = 100, step = 1, fmt = "percent" },
+                { id = "enemy_new_game_bonus", type = "check", val = 1, def = false },
+                { id = "enemy_resource_boost", type = "track", val = 2, def = 0, min = -50, max = 50, step = 1 },
+                { id = "enemy_base_boost", type = "track", val = 2, def = 0, min = -50, max = 50, step = 1 },
+            } },
+            { id = "capture", featured = { "auto_capture", "auto_capture_max_distance" }, rows = {
+                { id = "auto_capture", type = "check", val = 1, def = false },
+                { id = "auto_capture_max_distance", type = "track", val = 2, def = 50, min = 0, max = 100, step = 5, fmt = "meters" },
+                { id = "auto_capture_wait_time", type = "track", val = 2, def = 1, min = 0, max = 10, step = 1, fmt = "time_dhm" },
+                { id = "use_old_auto_capture", type = "check", val = 1, def = false },
+                { id = "prevent_mainbase_attacks", type = "check", val = 1, def = true },
+            } },
+            { id = "relations", featured = { "relation_pacing", "relation_daily_budget" }, rows = {
+                { id = "relation_pacing", type = "check", val = 1, def = true },
+                { id = "relation_daily_budget", type = "track", val = 2, def = 250, min = 0, max = 2000, step = 50 },
+                { id = "relation_all_pairs", type = "check", val = 1, def = true },
+                { id = "relation_step", type = "track", val = 2, def = 25, min = 0, max = 200, step = 5 },
+                { id = "relation_capture_step", type = "track", val = 2, def = 10, min = 0, max = 200, step = 1 },
+                { id = "relation_friendship_rate", type = "track", val = 2, def = 50, min = 0, max = 200, step = 5, fmt = "percent" },
+                { id = "relation_hostility_rate", type = "track", val = 2, def = 100, min = 0, max = 200, step = 5, fmt = "percent" },
+                { id = "relation_reach", type = "track", val = 2, def = 125, min = 100, max = 300, step = 5, fmt = "percent" },
+                { id = "relation_decay", type = "track", val = 2, def = 2, min = 0, max = 20, step = 1, fmt = "percent" },
+            } },
+            { id = "map", featured = { "fog_of_war", "hide_unfriendly_squads" }, rows = {
+                { id = "fog_of_war", type = "check", val = 1, def = false },
+                { id = "fog_of_war_distance", type = "track", val = 2, def = 50, min = 0, max = 100, step = 1, fmt = "meters" },
+                { id = "fog_of_war_memory", type = "check", val = 1, def = true },
+                { id = "fog_of_war_blind", type = "check", val = 1, def = false },
+                { id = "hide_unfriendly_squads", type = "check", val = 1, def = true },
+                { id = "hide_smarts", type = "check", val = 1, def = false },
+                { id = "hide_underground_smarts", type = "check", val = 1, def = true },
+                { id = "hide_lair_smarts", type = "check", val = 1, def = false },
+            } },
+            { id = "economy", rows = {
+                { id = "novice_squad_price", type = "track", val = 2, def = 1000, min = 0, max = 100000, step = 1000 },
+                { id = "advanced_squad_price", type = "track", val = 2, def = 10000, min = 0, max = 100000, step = 1000 },
+                { id = "veteran_squad_price", type = "track", val = 2, def = 50000, min = 0, max = 100000, step = 1000 },
+                { id = "heli_price", type = "track", val = 2, def = 75000, min = 0, max = 100000, step = 1000 },
+                { id = "actor_influence_weight", type = "track", val = 2, def = 250, min = 0, max = 10000, step = 50 },
+                { id = "actor_support_enemy_rank_weight", type = "track", val = 2, def = 0, min = 0, max = 5, step = 0.1 },
+                { id = "actor_support_reward_money", type = "track", val = 2, def = 0, min = 0, max = 10000, step = 50 },
+                { id = "actor_support_reward_influence", type = "track", val = 2, def = 0, min = 0, max = 20, step = 1 },
+                { id = "actor_support_goodwill_base", type = "track", val = 2, def = 0, min = 0, max = 100, step = 5 },
+                { id = "actor_support_goodwill_weight", type = "track", val = 2, def = 0.001, min = 0, max = 0.01, step = 0.0005 },
+            } },
+            { id = "mutants", featured = { "monster_max_squads_per_level" }, rows = {
+                { id = "monster_max_squads_per_level", type = "track", val = 2, def = 10, min = 0, max = 50, step = 1 },
+                { id = "monster_max_squads_per_level_lab", type = "track", val = 2, def = 5, min = 0, max = 20, step = 1 },
+                { id = "monster_min_faction_respawn", type = "track", val = 2, def = 600, min = 0, max = 20000, step = 10, fmt = "time_dhms" },
+                { id = "monster_max_faction_respawn", type = "track", val = 2, def = 6000, min = 0, max = 20000, step = 10, fmt = "time_dhms" },
+                { id = "monster_rare_chance_south", type = "track", val = 2, def = 3, min = 0, max = 100, step = 1, fmt = "percent" },
+                { id = "monster_rare_chance_north", type = "track", val = 2, def = 10, min = 0, max = 100, step = 1, fmt = "percent" },
+                { id = "monster_rare_chance_lab", type = "track", val = 2, def = 50, min = 0, max = 100, step = 1, fmt = "percent" },
+                { id = "monster_night_power_multiplier", type = "track", val = 2, def = 2.0, min = 1.0, max = 5.0, step = 0.1 },
+                { id = "enable_mutant_offline_combat", type = "check", val = 1, def = true },
+                { id = "zcp_mutant_spawns", type = "check", val = 1, def = true },
+            } },
+            { id = "combat", featured = { "offline_combat_distance" }, rows = {
+                { id = "offline_combat_distance", type = "track", val = 2, def = 50, min = 1, max = 100, step = 1, fmt = "meters" },
+                { id= "distance_based_combat_multiplier"                 ,type= "check"    ,val= 1    ,def= true                                                  },
+                { id= "distance_combat_max_multiplier_base"                 ,type= "track"    ,val= 2    ,def= 2.0      ,min= 1.0     ,max= 10.0        ,step= 0.1 },
+                { id= "distance_combat_max_multiplier_resource"            ,type= "track"    ,val= 2    ,def= 1.5      ,min= 1.0     ,max= 10.0        ,step= 0.1 },
+                { id= "distance_combat_max_multiplier_territory"        ,type= "track"    ,val= 2    ,def= 1.0      ,min= 1.0     ,max= 10.0        ,step= 0.1 },
+                { id= "distance_combat_max_multiplier_lair"                ,type= "track"    ,val= 2    ,def= 1.0      ,min= 1.0     ,max= 10.0        ,step= 0.1 },
+                { id= "distance_combat_min_multiplier"                     ,type= "track"    ,val= 2    ,def= 0.5      ,min= 0.1     ,max= 10.0        ,step= 0.1 },
+                { id= "distance_combat_max_distance"                     ,type= "track"    ,val= 2    ,def= 300     ,min= 100     ,max= 2000        ,step= 100, fmt = "meters" },
+            } },
+            { id = "timing", featured = { "spawn_speed_multiplier" }, rows = {
+                { id= "spawn_speed_multiplier"                          ,type= "track"    ,val= 2    ,def= 1.0     ,min= 0.1     ,max= 10.0        ,step= 0.1 },
+                { id= "spawn_timer_max_multiplier"                      ,type= "track"    ,val= 2    ,def= 200     ,min= 1       ,max= 1000        ,step= 5 },
+                { id= "use_new_resurgence_logic"                         ,type= "check"    ,val= 1    ,def= true },
+                { id = "min_invasion_depart_time", type = "track", val = 2, def = 1800, min = 0, max = 20000, step = 100, hint = "alife_warfare_faction_min_invasion_depart_time", fmt = "time_dhm" },
+                { id = "max_invasion_depart_time", type = "track", val = 2, def = 2400, min = 0, max = 20000, step = 100, hint = "alife_warfare_faction_max_invasion_depart_time", fmt = "time_dhm" },
+                { id = "overflow_distance_cost", type = "track", val = 2, def = 5, min = 1, max = 50, step = 1 },
+                { id = "overflow_overrides_manual_control", type = "check", val = 1, def = true },
+            } },
+            { id = "world_events", featured = { "emission_effect" }, rows = {
+                { id = "emission_effect", type = "list", val = 0, def = "off", content = {{"off"}, {"kill"}, {"zombify"}} },
+                { id = "purge_zone_percentage", type = "track", val = 2, def = 5, min = 0, max = 100, step = 1, fmt = "percent" },
+                { id = "territory_diplo_penalty", type = "check", val = 1, def = true },
+            } },
+            { id = "debug", featured = { "log_level" }, rows = {
+                { id = "log_level", type = "list", val = 0, def = "warn", content = {{"off"}, {"error"}, {"warn"}, {"info"}, {"debug"}, {"trace"}} },
+                { id = "enable_busyhands_tracer", type = "check", val = 1, def = false, restart = true },
+            } },
+        }, {
+            { id = "slide_warfare", type = "slide", link = "ui_options_slider_warfare", text = "ui_mm_title_warfare", size = { 512, 50 } },
+        }),
+    }
+
+    warfare_options.gr[alife_warfare_azazel_options_index].presets = nil
+    warfare_options.gr[alife_warfare_azazel_options_index].warfare_presets = true
+
+    -- Each faction needs its own `def` for the behavior traits, and ui_options.get caches `def`
+    -- into axr_main.config on first read -- so a shared row would persist one faction's lore value
+    -- for all thirteen. Only the trait rows are copied; every other row stays shared.
+    local function faction_gr(faction)
+        local gr = {}
+        for j = 1, #options do
+            local row = options[j]
+            if row.val and warfare_behavior.TRAITS[row.id] then
+                local copy = {}
+                for k, v in pairs(row) do
+                    copy[k] = v
+                end
+                copy.def = warfare_behavior.default(faction, row.id)
+                gr[j] = copy
+            else
+                gr[j] = row
+            end
+        end
+        return gr
+    end
+
+    local FACTIONS = { "stalker", "bandit", "csky", "army", "freedom", "dolg", "ecolog", "killer", "monolith", "renegade", "greh", "isg", "zombied" }
+    for i, faction in ipairs(FACTIONS) do
+        warfare_options.gr[alife_warfare_stalker_options_index + i - 1] = {
+            id = faction,
+            sh = true,
+            warfare_presets = true,
+            id_gr = "warfare_faction",
+            apply_to_all = true,
+            gr = faction_gr(faction),
+        }
+    end
+
+    -- Player Command. Three modes (see warfare_squad_command): "ranked" scales the controllable
+    -- count with the actor's rank on the fixed Anomaly rank ladder and lets the rank gap decide
+    -- which squads are eligible; "unrestricted" keeps the command layer but drops both limits (any
+    -- number of squads, any tier); "off" removes the command layer entirely. The ceiling below is
+    -- what the ranked quota grows toward, and is unused in the other two modes.
+    warfare_options.gr[alife_warfare_stalker_options_index + #FACTIONS] = {
+        id = "command",
+        sh = true,
+        warfare_presets = true,
+        gr = {
+            { id = "slide_command", type = "slide", link = "ui_options_slider_warfare", text = "ui_mm_menu_command", size = { 512, 50 } },
+            { id = "command_mode", type = "list", val = 0, def = "ranked", content = {{"ranked"}, {"unrestricted"}, {"off"}} },
+            { id = "command_max_squads", type = "track", val = 2, def = 10, min = 1, max = 30, step = 1 },
+        },
+    }
+
+    local function code_option(gr, id, num)
+        local path
+        for i = 1, #gr do
+            if ui_options.allowed_type[gr[i].type] then
+                path = ui_options.cc(id, gr[i].id)
+                ui_options.opt_index[path] = ui_options.cc(num, i)
+                ui_options.opt_val[path] = gr[i].val
+            end
+        end
+    end
+
+    local id_1, id_2, id_3
+    -- Level 1
+    for i = 1, #ui_options.options do
+        id_1 = ui_options.options[i].id
+        if ui_options.options[i].sh then
+            code_option(ui_options.options[i].gr, id_1, i)
+        else
+            -- Level 2
+            for ii = 1, #ui_options.options[i].gr do
+                id_2 = ui_options.options[i].gr[ii].id
+                if ui_options.options[i].gr[ii].sh then
+                    code_option((ui_options.options[i].gr[ii].gr), (id_1 .. ui_options._opt_ .. id_2), (i .. ui_options._opt_ .. ii))
+                else
+                    -- Level 3
+                    for iii = 1, #ui_options.options[i].gr[ii].gr do
+                        id_3 = ui_options.options[i].gr[ii].gr[iii].id
+                        if ui_options.options[i].gr[ii].gr[iii].sh then
+                            code_option((ui_options.options[i].gr[ii].gr[iii].gr), (id_1 .. ui_options._opt_ .. id_2 .. ui_options._opt_ .. id_3), (i .. ui_options._opt_ .. ii .. ui_options._opt_ .. iii))
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+function ui_mm_faction_select.UINewGame:OnCheckSetStory()
+    if (not self.access) then
+        return
+    end
+    warfare_log.info("modxml_warfare.OnCheckSetStory: story mode selected, clearing survival/azazel")
+
+    self.ck_survival:SetCheck(false)
+    self.ck_states["ck_survival"] = false
+
+    self.ck_azazel_mode:SetCheck(false)
+    self.ck_states["ck_azazel_mode"] = false
+
+    self:LoadMap()
+end
+
+function ui_mm_faction_select.UINewGame:OnCheckSetWarfare()
+    if (not self.access) then
+        return
+    end
+    warfare_log.info("modxml_warfare.OnCheckSetWarfare: warfare mode selected, clearing survival")
+
+    self.ck_survival:SetCheck(false)
+    self.ck_states["ck_survival"] = false
+
+    self:LoadMap()
+end
+
+local old_on_game_load = ui_mm_faction_select.on_game_load
+function ui_mm_faction_select.on_game_load(binder)
+    local config = axr_main.config
+    if not (config) then
+        warfare_log.warn("modxml_warfare.on_game_load: axr_main.config nil")
+        return
+    end
+    local faction = config:r_value("character_creation", "new_game_faction", 3) or ""
+    old_on_game_load(binder)
+    warfare_log.debug("modxml_warfare.on_game_load: new_game_faction=%s", tostring(faction))
+    if not ui_mm_faction_select.faction_psi_off[faction] then
+        return
+    end
+
+    --WHen this condition is met, original function gives these info to the actor
+    if (config:r_value("character_creation", "new_game_story_mode", 1) == true) and (not has_alife_info("story_mode_disabled")) then
+        warfare_log.info("modxml_warfare.on_game_load: psi-off faction=%s story mode active, disabling story-flag infos", tostring(faction))
+        local info_to_disable = {
+            "yan_labx16_switcher_1_off",
+            "yan_labx16_switcher_2_off",
+            "yan_labx16_switcher_3_off",
+            "yan_labx16_switcher_primary_off",
+            "bar_deactivate_radar_done",
+            "warlab_deactivate_generators_done"
+        }
+        for _, info in pairs(info_to_disable) do
+            disable_info(info)
+        end
+    end
+
+    local helm_name = "good_psy_helmet"
+    warfare_log.info("modxml_warfare.on_game_load: giving psi-off faction=%s a %s", tostring(faction), tostring(helm_name))
+    alife_create_item(helm_name, db.actor)
+end
+
+local old_actor_on_first_update = ui_mm_faction_select.actor_on_first_update
+function ui_mm_faction_select.actor_on_first_update(binder, delta)
+    old_actor_on_first_update(binder, delta)
+    -- Survival mode
+    if (IsSurvivalMode()) then
+        warfare_log.info("modxml_warfare.actor_on_first_update: survival mode init, suppressing zombied/monolith relations")
+        game_relations.change_factions_community_num("zombied", 0, -5000)
+        game_relations.change_factions_community_num("monolith", 0, -5000)
+
+        local faction = character_community(db.actor):sub(7)
+        if (ini_sys:section_exist("survival_squad_" .. faction) and ui_mm_faction_select.start_pos) then
+            warfare_log.info("modxml_warfare.actor_on_first_update: spawning survival_squad_%s", tostring(faction))
+            local squad = alife_create("survival_squad_" .. faction, ui_mm_faction_select.start_pos[3], ui_mm_faction_select.start_pos[1], ui_mm_faction_select.start_pos[2])
+            if (squad) then
+                axr_companions.companion_squads[squad.id] = squad
+                squad:create_npc(nil, ui_mm_faction_select.start_pos[3], ui_mm_faction_select.start_pos[1], ui_mm_faction_select.start_pos[2])
+                for k in squad:squad_members() do
+                    local se_obj = k.object or k.id and alife():object(k.id)
+                    if (se_obj) then
+                        game_relations.change_factions_community_num("zombied", k.id, -5000)
+                        SIMBOARD:setup_squad_and_group(se_obj)
+
+                        se_save_var(se_obj.id, se_obj:name(), "companion", true)
+                        se_save_var(se_obj.id, se_obj:name(), "companion_cannot_dismiss", true)
+                    end
+                end
+            else
+                warfare_log.warn("modxml_warfare.actor_on_first_update: alife_create survival_squad_%s returned nil", tostring(faction))
+            end
+        end
+    end
+end

@@ -1,0 +1,183 @@
+local ROOT = "zone_frontline"
+local SECTION = "zf_frontline"
+local PAGES = {
+    { "main", {
+        { "enabled", "check" },
+        { "news_all_levels", "check" },
+        { "online_budget", 20, 150, 5 },
+        { "pop_cap", 0, 100, 5 },
+        { "respawn_max_min", 0, 600, 5 },
+        { "coop_companions", "check" },
+    } },
+    { "war", {
+        { "counter_chance", 0, 1, 0.05 },
+        { "raid_chance", 0, 1, 0.05 },
+        { "assault_chance", 0, 1, 0.05 },
+        { "assault_cooldown_h", 6, 168, 6 },
+        { "assault_squads_max", 2, 10, 1 },
+        { "art_chance", 0, 1, 0.05 },
+        { "art_cooldown_h", 4, 96, 2 },
+        { "morale_break", 0, 0.9, 0.05 },
+        { "reinforce_count", 0, 4, 1 },
+        { "strike_enabled", "check" },
+        { "strike_cost", 5000, 100000, 5000 },
+        { "strike_cooldown_h", 0, 24, 1 },
+        { "strike_shells", 3, 16, 1 },
+    } },
+    { "garrison", {
+        { "garrison_enabled", "check" },
+        { "garrison_share", 0, 1, 0.05 },
+        { "home_return", "check" },
+        { "garrison_steady", "check" },
+        { "front_step", 300, 2000, 100 },
+        { "garrison_dig_h", 2, 48, 1 },
+        { "garrison_fort_power", 0, 0.5, 0.05 },
+        { "garrison_rotate_h", 6, 120, 6 },
+        { "garrison_supply", "check" },
+        { "garrison_supply_h", 6, 96, 6 },
+        { "garrison_extra_max", 0, 3, 1 },
+        { "garrison_intercept_chance", 0, 1, 0.05 },
+        { "post_traders", "check" },
+        { "post_trader_max", 0, 10, 1 },
+        { "post_free_chance", 0, 1, 0.05 },
+    } },
+    { "captives", {
+        { "surrender_base", 0, 1, 0.05 },
+        { "surrender_max", 0, 1, 0.05 },
+        { "surrender_hp", 0.1, 0.9, 0.05 },
+        { "pow_pay_mult", 0, 5, 0.1 },
+        { "execution_mult", 0, 3, 0.1 },
+        { "rescue_chance", 0, 1, 0.05 },
+        { "escape_chance", 0, 1, 0.05 },
+    } },
+    { "diplomacy", {
+        { "dip_chance", 0, 1, 0.05 },
+        { "dip_interval_h", 2, 72, 2 },
+        { "dip_scale", 0, 3, 0.1 },
+    } },
+    { "encounters", {
+        { "enc_enabled", "check" },
+        { "event_marks", "check" },
+        { "enc_chance", 0, 1, 0.05 },
+        { "enc_max_active", 0, 6, 1 },
+        { "enc_cooldown_h", 0.5, 12, 0.5 },
+        { "event_chance", 0, 1, 0.05 },
+        { "event_cooldown_h", 1, 24, 1 },
+        { "assassin_chance", 0, 1, 0.05 },
+        { "event_w_wounded", 0, 10, 1 },
+        { "event_w_defector", 0, 10, 1 },
+        { "event_w_scientists", 0, 10, 1 },
+        { "shield_enabled", "check" },
+        { "shield_hit", 0, 1, 0.05 },
+    } },
+    { "classes", {
+        { "cls_enabled", "check" },
+        { "assault_armor", 0.5, 1, 0.05 },
+        { "sapper_mines", 0, 5, 1 },
+        { "radio_fire_chance", 0, 1, 0.05 },
+        { "runner_chance", 0, 1, 0.05 },
+    } },
+    { "fauna", {
+        { "fauna_enabled", "check" },
+        { "lair_raid_chance", 0, 1, 0.05 },
+        { "lair_spawn_max", 0, 20, 1 },
+        { "alpha_chance", 0, 1, 0.05 },
+        { "alpha_armor", 0.3, 1, 0.05 },
+        { "maneater_kills", 0, 10, 1 },
+        { "migration_squads", 0, 10, 1 },
+        { "scavenge_chance", 0, 1, 0.05 },
+        { "lair_bounty_base", 0, 10000, 250 },
+    } },
+    { "errands", {
+        { "err_enabled", "check" },
+        { "err_auto_max", 0, 15, 1 },
+        { "err_comp_max", 1, 6, 1 },
+        { "err_travel_h", 4, 48, 1 },
+        { "err_robbery_chance", 0, 1, 0.05 },
+        { "quest_greed_value", 1000, 30000, 1000 },
+        { "hire_enabled", "check" },
+        { "hire_price_mult", 0.2, 3, 0.1 },
+        { "hire_friends", "check" },
+        { "hire_max", 1, 5, 1 },
+    } },
+    { "life", {
+        { "life_enabled", "check" },
+        { "meet_cooldown_min", 5, 120, 5 },
+        { "chase_chance", 0, 1, 0.05 },
+        { "chase_flee_dist", 30, 300, 10 },
+        { "hunters_chance", 0, 1, 0.05 },
+        { "thief_chance", 0, 1, 0.05 },
+        { "courier_chance", 0, 1, 0.05 },
+        { "rob_chance", 0, 1, 0.05 },
+    } },
+    { "traders", {
+        { "trader_enabled", "check" },
+        { "trader_max", 0, 12, 1 },
+        { "trader_chance", 0, 1, 0.05 },
+        { "trader_mark_chance", 0, 1, 0.05 },
+        { "trader_life_h", 4, 72, 2 },
+        { "trader_ambush_chance", 0, 0.2, 0.01 },
+        { "trader_free_chance", 0, 1, 0.05 },
+    } },
+    { "debug", {
+        { "debug", "check" },
+    } },
+}
+local INTENSITY = {
+    calm = { counter_chance = 0.4, raid_chance = 0.1, assault_chance = 0.08, art_chance = 0.05,
+        assault_cooldown_h = 96, art_cooldown_h = 72 },
+    hot = { counter_chance = 0.9, raid_chance = 0.45, assault_chance = 0.4, art_chance = 0.3,
+        assault_cooldown_h = 24, art_cooldown_h = 18 },
+}
+local KEYS = {}
+for _, page in ipairs(PAGES) do
+    for _, o in ipairs(page[2]) do
+        KEYS[o[1]] = { ROOT .. "/" .. page[1] .. "/" .. o[1], o[2] == "check" and 1 or 2 }
+    end
+end
+function path(key)
+    local k = KEYS[key]
+    if k then return k[1], k[2] end
+end
+local function file_value(key, check)
+    local v = ini_sys:r_string_ex(SECTION, key)
+    if check then return v == "true" or v == "1" or v == "on" end
+    return tonumber(v) or 0
+end
+local function option(o)
+    local key = o[1]
+    if o[2] == "check" then
+        return { id = key, type = "check", val = 1, def = file_value(key, true), hint = "zf_" .. key }
+    end
+    local min, max, step = o[2], o[3], o[4]
+    return { id = key, type = "track", val = 2, min = min, max = max, step = step,
+        prec = step < 1 and 2 or 0, def = math.max(min, math.min(max, file_value(key))), hint = "zf_" .. key }
+end
+function on_mcm_load()
+    local pages = {}
+    for _, page in ipairs(PAGES) do
+        local id = page[1]
+        local gr = {
+            { id = "title", type = "title", text = "ui_mcm_zf_page_" .. id, align = "l", clr = { 255, 196, 176, 128 } },
+            { id = "about", type = "desc", text = "ui_mcm_zf_page_" .. id .. "_desc" },
+        }
+        if id == "war" then
+            local normal = {}
+            for k in pairs(INTENSITY.calm) do normal[k] = file_value(k) end
+            gr[#gr + 1] = { id = "intensity", type = "preset", val = 0, def = "normal", hint = "zf_intensity", no_str = true,
+                content = { { "calm", "ui_mcm_zf_intensity_calm" }, { "normal", "ui_mcm_zf_intensity_normal" },
+                    { "hot", "ui_mcm_zf_intensity_hot" } },
+                presets = { calm = INTENSITY.calm, normal = normal, hot = INTENSITY.hot } }
+        end
+        gr[#gr + 1] = { id = "line", type = "line" }
+        for _, o in ipairs(page[2]) do gr[#gr + 1] = option(o) end
+        pages[#pages + 1] = { id = id, sh = true, text = "ui_mcm_zf_page_" .. id, gr = gr }
+    end
+    return { id = ROOT, gr = pages }
+end
+function on_game_start()
+    if XrrNet and xrr_mcm_authority and xrr_mcm_authority.declare then
+        xrr_mcm_authority.declare(ROOT, "host")
+        xrr_mcm_authority.declare(ROOT .. "/debug", "local")
+    end
+end

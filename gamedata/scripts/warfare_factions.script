@@ -1,0 +1,593 @@
+--[[
+
+=======================================================================================
+    Original creator: Werejew
+    Edit log:
+    2020/11/07 - Vintar - Resurgence chance added to resurgence calculation
+    2021/02/19 - Vintar - stronger resurgence attempts, now uses fetch_smart_distance(), debug messages
+    2021/03/27 - Vintar - loners exempt from random patrol targeting. Random patrols no longer spawn too close to actor.
+    2021/11/22 - Vintar - slight change to resurgence base count
+
+    This file handles faction-level warfare stuff like random patrols, resurgences, etc.
+=======================================================================================
+
+--]]
+
+factions_p = {}
+factions = {
+    "stalker",
+    "bandit",
+    "csky",
+    "army",
+    "freedom",
+    "dolg",
+    "ecolog",
+    "killer",
+    "monolith",
+    "greh",
+    "renegade",
+    "isg",
+    --"monster",
+    "zombied",
+}
+
+all_factions = {
+    "stalker",
+    "bandit",
+    "csky",
+    "army",
+    "freedom",
+    "dolg",
+    "ecolog",
+    "killer",
+    "monolith",
+    "greh",
+    "renegade",
+    "isg",
+    "monster",
+    "zombied",
+}
+
+faction_information = {}
+faction_timers = {}
+
+for i = 1, #factions do
+    factions_p[factions[i]] = true
+end
+
+--[[
+
+    faction_information[faction] = {
+        base_count,
+        resource_count,
+        total_power,
+        defense_squads, -- current_action == 1 and (target.props.base > 0 or target.props.resource > 0)
+        offense_squads, -- current_action == 0 and (target.props.base > 0 or target.props.resource > 0)
+        patrol_squads,    -- current_action == 0 and (target.props.base == 0 and target.props.resource == 0)
+        relations = {
+            [faction] = value
+        },
+    }
+
+]]
+
+-- Advance faction-level spawn timer timestamps forward by the given number of game seconds.
+-- Called at the night-to-day transition to preserve timer progress across night,
+-- and on instant big time jumps to freeze timers.
+function advance_spawn_timers(seconds)
+    warfare_log.debug("advance_spawn_timers: advancing faction timers by %s seconds", tostring(seconds))
+    for _, faction in pairs(factions) do
+        local info = faction_information[faction]
+        if info then
+            if info.last_random_patrol then
+                info.last_random_patrol = warfare_utils.add_time(info.last_random_patrol, seconds)
+            end
+            if info.last_resurgence_attempt then
+                info.last_resurgence_attempt = warfare_utils.add_time(info.last_resurgence_attempt, seconds)
+            end
+        end
+    end
+end
+
+function update()
+    warfare_log.trace("warfare_factions.update: tick start")
+    for i, faction in pairs(factions) do
+        if faction ~= "monster" then
+            update_faction(faction)
+        end
+    end
+end
+
+function update_faction(faction)
+    if (not faction or faction == "none") then
+        warfare_log.trace("update_faction: skip nil/none faction")
+        return
+    end
+
+    local ff = warfare_options.options.factions[faction]
+    if not ff then
+        warfare_log.warn("update_faction: no options for faction=%s", tostring(faction))
+        return
+    end
+    warfare_log.trace("update_faction: faction=%s", tostring(faction))
+
+    local min_resurgence_wait_time = ff.min_resurgence_wait_time
+    local max_resurgence_wait_time = ff.max_resurgence_wait_time
+    local faction_resurgence_chance = ff.resurgence_chance
+    local max_random_patrols = ff.max_random_patrols
+    local min_random_patrol_time = ff.min_random_patrol_time
+    local max_random_patrol_time = ff.max_random_patrol_time
+    local spawn_mult = warfare_options.options.spawn_speed_multiplier or 1
+
+    if not (faction_information[faction]) then
+        local next_resurgence_attempt = math.random(min_resurgence_wait_time, max_resurgence_wait_time)
+        local next_random_patrol = math.random(min_random_patrol_time, max_random_patrol_time) * spawn_mult
+
+        warfare_log.info("update_faction: initializing faction_information for %s (next_res=%s, next_patrol=%s)", tostring(faction), tostring(next_resurgence_attempt), tostring(next_random_patrol))
+        faction_information[faction] = {}
+        faction_information[faction].base_count = 0
+        faction_information[faction].resource_count = 0
+        faction_information[faction].owned_base_count = 0
+        faction_information[faction].owned_resource_count = 0
+        faction_information[faction].total_power = 0
+        faction_information[faction].inactive_squads = 0
+        faction_information[faction].active_squads = 0
+        faction_information[faction].faction_respawn = 0
+        faction_information[faction].patrol_respawn = 0
+        faction_information[faction].invasion_size = 0
+        faction_information[faction].patrol_pop_factor = 0
+        faction_information[faction].last_resurgence_attempt = warfare.get_time()
+        faction_information[faction].next_resurgence_attempt = next_resurgence_attempt
+        faction_information[faction].next_random_patrol = 0
+        faction_information[faction].last_random_patrol = warfare.get_time()
+    end
+
+    local fi = faction_information[faction]
+
+    if (not fi.timer or warfare.get_time_ref():diffSec(fi.timer) >= (fi.next_update * 6)) then
+        warfare_log.trace("update_faction: %s entering update branch (base_count=%s, resource_count=%s, total_power=%s)", tostring(faction), tostring(fi.base_count), tostring(fi.resource_count), tostring(fi.total_power))
+
+        local last_resurgence_attempt = fi.last_resurgence_attempt or warfare.get_time()
+        local next_resurgence_attempt = fi.next_resurgence_attempt or math.random(min_resurgence_wait_time, max_resurgence_wait_time)
+        local last_random_patrol = fi.last_random_patrol or warfare.get_time()
+        local next_random_patrol = fi.next_random_patrol or math.random(min_random_patrol_time, max_random_patrol_time) * spawn_mult
+
+        -- Fix #3: save timer state before wipe
+        local old_timer = fi.timer
+        local old_next_update = fi.next_update or 1
+
+        faction_information[faction] = {}
+        fi = faction_information[faction]
+
+        if old_timer then
+            fi.timer = warfare_utils.add_time(old_timer, old_next_update * 6)
+        else
+            fi.timer = warfare.get_time()
+        end
+
+        fi.next_update = math.random(1, 5)
+        fi.base_count = 0
+        fi.resource_count = 0
+        fi.owned_base_count = 0
+        fi.owned_resource_count = 0
+        fi.total_power = 0
+        fi.inactive_squads = 0
+        fi.active_squads = 0
+        fi.faction_respawn = 0
+        fi.patrol_respawn = 0
+        fi.invasion_size = 0
+        fi.patrol_pop_factor = 0
+        fi.last_resurgence_attempt = last_resurgence_attempt
+        fi.next_resurgence_attempt = next_resurgence_attempt
+        fi.last_random_patrol = last_random_patrol
+        fi.next_random_patrol = next_random_patrol
+
+        -- Fix #2: single pass for active + inactive squad counts per level
+        for i, lvl in pairs(level_targets.active_levels) do
+            local info = warfare_levels.level_information[lvl]
+
+            if (info and info.faction_stats and info.faction_stats[faction]) then
+                local num_active, num_inactive = sim_offline_combat.get_num_squads_on_level_both(lvl, faction)
+
+                fi.base_count = fi.base_count + info.faction_stats[faction].base_count
+                fi.resource_count = fi.resource_count + info.faction_stats[faction].resource_count
+                fi.total_power = fi.total_power + info.faction_stats[faction].total_power
+                fi.active_squads = fi.active_squads + num_active
+                fi.inactive_squads = fi.inactive_squads + num_inactive
+            end
+        end
+
+        local base_count = fi.base_count or 0
+        local resource_count = fi.resource_count or 0
+
+        -- What the faction actually holds, before any option boost. The PDA reports this; the
+        -- simulation reads the boosted fi.base_count / fi.resource_count set further down.
+        fi.owned_base_count = base_count
+        fi.owned_resource_count = resource_count
+
+        if (game_relations.is_factions_enemies(faction, warfare.actor_faction)) then
+            base_count = base_count + warfare_options.options.enemy_base_boost
+            resource_count = resource_count + warfare_options.options.enemy_resource_boost
+        end
+
+        -- fi.base_count / fi.resource_count carry the option boosts from here on. Everything reading
+        -- them downstream must take them as-is: adding base_count_modifier again applies it twice.
+        base_count = base_count + (ff.base_count_modifier or 0)
+        resource_count = resource_count + (ff.resource_count_modifier or 0)
+
+        fi.base_count = base_count
+        fi.resource_count = resource_count
+        warfare_log.trace("update_faction: %s aggregated bases=%s resources=%s power=%s active=%s inactive=%s", tostring(faction), tostring(base_count), tostring(resource_count), tostring(fi.total_power), tostring(fi.active_squads), tostring(fi.inactive_squads))
+
+        local respawn = warfare.lerp(ff.max_faction_respawn, ff.min_faction_respawn, clamp(resource_count / warfare.resource_count, 0, 1)) * spawn_mult
+        local patrol_respawn = warfare.lerp(ff.max_patrol_time, ff.min_patrol_time, clamp(resource_count / warfare.resource_count, 0, 1)) * spawn_mult
+        local invasion_size = warfare.lerp(ff.min_invasion_size, ff.max_invasion_size, clamp(base_count / warfare.base_count, 0, 1))
+        local patrol_pop_factor = ff.patrol_squads
+
+        -- Fix #1: only clean up current faction's registered squads (was iterating ALL factions)
+        local tbl = warfare.registered_squads[faction]
+        if tbl then
+            for ID, target in pairs(tbl) do
+                local obj = alife_object(ID)
+
+                if (obj) then
+                    if not (obj.clsid and obj:clsid() == clsid.online_offline_group_s and obj:get_squad_community() == faction) then
+                        warfare_log.debug("update_faction: %s unregistering stale squad id=%s (wrong clsid/community)", tostring(faction), tostring(ID))
+                        tbl[ID] = nil
+                    end
+                else
+                    warfare_log.debug("update_faction: %s unregistering vanished squad id=%s", tostring(faction), tostring(ID))
+                    tbl[ID] = nil
+                end
+            end
+        end
+
+        fi.faction_respawn = respawn
+        fi.patrol_respawn = patrol_respawn
+        fi.invasion_size = invasion_size
+        fi.patrol_pop_factor = patrol_pop_factor
+
+        if (ff.random_patrols) and not warfare.is_spawn_blocked() then
+            if (warfare.get_time_ref():diffSec(fi.last_random_patrol) > fi.next_random_patrol * 6) then
+                warfare_log.debug("update_faction: %s random patrol timer elapsed, attempting spawn", tostring(faction))
+                fi.last_random_patrol = warfare_utils.add_time(fi.last_random_patrol, fi.next_random_patrol*6)
+                fi.next_random_patrol = math.random(min_random_patrol_time, max_random_patrol_time) * spawn_mult
+
+                local start_id = smart_terrain_warfare.find_random_patrol_target(nil, faction)
+                local start = start_id and alife_object(start_id)
+                local target_id
+
+                -- independent factions don't get sent off randomly; their own dispatcher moves them
+                if warfare_behavior.is_independent(faction) then
+                    target_id = start_id
+                else
+                    target_id = smart_terrain_warfare.find_random_patrol_target(start, faction)
+                end
+
+                -- Fix #4: O(1) patrol count instead of iterating all patrols
+                local count = smart_terrain_warfare.get_random_patrol_count(faction)
+
+                if (start and target_id and (count < max_random_patrols)) then
+                    local spawn_random_patrol = true
+
+                    -- don't spawn random patrols too close to player
+                    if (start.is_on_actor_level) then
+                        local actor_dist = start.position:distance_to(db.actor:position())
+                        if (actor_dist < 50) then
+                            spawn_random_patrol = false
+                            fi.next_random_patrol = math.random(30, 120)        -- if random patrol fails to spawn, check back sooner to try elsewhere
+                            warfare_log.debug("update_faction: %s random patrol cancelled (start %s too close to player: %s)", tostring(faction), start:name(), tostring(actor_dist))
+                        end
+                    end
+
+                    if spawn_random_patrol then
+                        local current_level = start.level_id
+                        local section = faction_expansions.get_spawn_section(faction, fi.resource_count, current_level)
+                        local squad = warfare.spawn_squad(section, start:name())
+
+                        smart_terrain_warfare.set_random_patrol(squad.id, faction)
+                        sim_squad_warfare.set_target(squad, target_id)
+                        warfare_log.info("update_faction: %s spawned random patrol section=%s at %s targeting id=%s", tostring(faction), tostring(section), start:name(), tostring(target_id))
+                    end
+                else
+                    warfare_log.trace("update_faction: %s random patrol skipped (start=%s target=%s count=%s/%s)", tostring(faction), tostring(start and start:name()), tostring(target_id), tostring(count), tostring(max_random_patrols))
+                end
+            end
+        end
+
+        -- Emergency resurrection when faction has 0 bases
+        if not warfare.is_spawn_blocked() and (fi.base_count < 1) then
+            warfare_log.debug("update_faction: %s has 0 effective bases (base_count=%s), considering resurgence", tostring(faction), tostring(fi.base_count))
+            if (warfare.get_time_ref():diffSec(fi.last_resurgence_attempt) > fi.next_resurgence_attempt * 6) then
+                warfare_log.info("update_faction: %s resurgence timer elapsed, attempting resurrection", tostring(faction))
+                fi.last_resurgence_attempt = warfare.get_time()
+                fi.next_resurgence_attempt = math.random(min_resurgence_wait_time, max_resurgence_wait_time)
+
+                -- Choose between new and old resurgence logic
+                if warfare_options.options.use_new_resurgence_logic then
+                    -- Emergency spawn: Create powerful squad for extinct factions
+                    warfare_log.debug("update_faction: %s using new resurgence logic", tostring(faction))
+                    local emergency_attempted = emergency_resurrection_spawn(faction)
+                    if emergency_attempted then
+                        warfare_log.info("update_faction: %s emergency resurrection succeeded", tostring(faction))
+                    else
+                        warfare_log.warn("update_faction: %s emergency resurrection failed (no valid spawn/target)", tostring(faction))
+                    end
+                else
+                    -- Original resurgence logic with chance to skip
+                    if math.random(0, 99) < faction_resurgence_chance then
+                        warfare_log.debug("update_faction: %s using legacy resurgence logic (chance=%s)", tostring(faction), tostring(faction_resurgence_chance))
+                        local levels = warfare.hash_table_to_array(level_targets.active_levels)
+                        warfare.shuffleTable(levels)
+
+                        local attempted = false
+                        for _, v in pairs(levels) do
+                            local chosen = v.key
+                            local info = warfare_levels.level_information[chosen]
+
+                            if (info) then
+                                local smarts = info.smarts
+                                local targets = {}
+                                local spawns = {}
+
+                                for v, smart_id in pairs(smarts) do
+                                    local smart = alife_object(smart_id)
+
+                                    if (smart) then
+                                        if (smart.props and smart.props.base > 0) then
+                                            if (smart.owning_faction == "none" or game_relations.is_factions_enemies(smart.owning_faction, faction)) then
+                                                targets[#targets + 1] = smart
+                                            end
+                                        elseif (smart.props and smart.props.territory > 0 and (smart.props.resource == nil or smart.props.resource <= 0)) then
+                                            spawns[#spawns + 1] = smart
+                                        end
+                                    end
+                                end
+
+                                if (#spawns > 0 and #targets > 0) then
+                                    local target = targets[math.random(#targets)]
+
+                                    -- stronger resurgence attempts
+                                    local target_pop = 2 * target.max_population
+
+                                    local nearest_smart = nil
+                                    local nearest_dist = nil
+
+                                    attempted = true
+
+
+                                    for _, ter in pairs(spawns) do
+                                        local d = smart_terrain_warfare.fetch_smart_distance(target, ter)
+
+                                        if (nearest_dist == nil or d < nearest_dist) then
+                                            nearest_smart = ter
+                                            nearest_dist = d
+                                        end
+                                    end
+
+                                    warfare_log.info("update_faction: %s legacy resurgence spawning %s squads at %s targeting %s", tostring(faction), tostring(target_pop), nearest_smart and nearest_smart:name() or "?", target:name())
+
+                                    for j = 0, target_pop do
+                                        local current_level = nearest_smart.level_id
+                                    local section = faction_expansions.get_spawn_section(faction, fi.resource_count, current_level)
+                                        local squad = warfare.spawn_squad(section, nearest_smart:name())
+                                        sim_squad_warfare.set_target(squad, target.id)
+                                    end
+                                end
+                            end
+
+                            if (attempted) then
+                                break
+                            end
+                        end
+                        if not attempted then
+                            warfare_log.warn("update_faction: %s legacy resurgence found no valid level with spawns+targets", tostring(faction))
+                        end
+                    else
+                        warfare_log.trace("update_faction: %s legacy resurgence rolled below chance, skipping", tostring(faction))
+                    end
+                end
+            end
+        end
+
+    end
+end
+
+-- Emergency resurrection function for extinct factions
+function emergency_resurrection_spawn(faction)
+    if not faction or faction == "none" then
+        warfare_log.warn("emergency_resurrection_spawn: invalid faction=%s", tostring(faction))
+        return false
+    end
+    warfare_log.debug("emergency_resurrection_spawn: starting for faction=%s", tostring(faction))
+
+    local levels = warfare.hash_table_to_array(level_targets.active_levels)
+    warfare.shuffleTable(levels)
+
+    local all_targets = {}
+    local priority_targets = {} -- Former faction bases get priority
+
+    -- Step 1: Collect all possible targets across all levels
+    for _,v in pairs(levels) do
+        local chosen = v.key
+        local info = warfare_levels.level_information[chosen]
+
+        if (info) then
+            local smarts = info.smarts
+
+            for v,smart_id in pairs(smarts) do
+                local smart = alife_object(smart_id)
+
+                if (smart) then
+                    if game_graph():vertex(smart.m_game_vertex_id):level_id() ~= get_player_level_id() then
+                        if (smart.props and smart.props.base > 0) then
+                            if (smart.owning_faction == "none" or game_relations.is_factions_enemies(smart.owning_faction, faction)) then
+                                local name = smart:name()
+
+                                -- A main base its own faction still holds cannot be taken
+                                -- while prevent_mainbase_attacks is on: offline combat
+                                -- refuses to engage there and squad_warfare_update rescues
+                                -- whoever arrives, so a resurrection aimed at one is spent
+                                -- for nothing.
+                                local protected = warfare_options.options.prevent_mainbase_attacks
+                                    and (smart_terrain_warfare.get_protected_base_faction(name)
+                                         == (smart.owning_faction or "none"))
+
+                                if not (protected) then
+                                    if smart_terrain_warfare.is_resurrect_base(name, faction) then
+                                        priority_targets[#priority_targets+1] = smart
+                                    elseif not (warfare_options.options.prevent_mainbase_attacks and smart_terrain_warfare.is_main_base(name)) then
+                                        all_targets[#all_targets+1] = smart
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- Step 2: Select the best target
+    local best_target = nil
+
+    warfare_log.debug("emergency_resurrection_spawn: %s candidates priority=%s all=%s", tostring(faction), tostring(#priority_targets), tostring(#all_targets))
+
+    if #priority_targets > 0 then
+        -- Pick a random former faction base as target
+        best_target = priority_targets[math.random(#priority_targets)]
+        warfare_log.debug("emergency_resurrection_spawn: %s chose priority target %s", tostring(faction), best_target:name())
+    elseif #all_targets > 0 then
+        -- Find closest target to any of the faction's known resurrection bases
+        local main_base_smarts = {}
+        local resurrect_names = smart_terrain_warfare.get_resurrect_bases(faction)
+        if resurrect_names then
+            for _, base_name in pairs(resurrect_names) do
+                local smart = alife():story_object(base_name)
+                if smart then main_base_smarts[#main_base_smarts+1] = smart end
+            end
+        end
+
+        if #main_base_smarts > 0 then
+            local best_dist = nil
+            for _,target in pairs(all_targets) do
+                for _,main_base in pairs(main_base_smarts) do
+                    local distance = smart_terrain_warfare.fetch_smart_distance(main_base, target)
+                    if distance > 10000 and (best_dist == nil or distance < best_dist) then
+                        best_dist = distance
+                        best_target = target
+                    end
+                end
+            end
+            if best_target then
+                warfare_log.debug("emergency_resurrection_spawn: %s picked closest-to-mainbase target %s (dist=%s)", tostring(faction), best_target:name(), tostring(best_dist))
+            end
+        end
+
+        -- Last resort: pick a random target if main base proximity didn't yield one
+        if not best_target then
+            best_target = all_targets[math.random(#all_targets)]
+            warfare_log.debug("emergency_resurrection_spawn: %s falling back to random target %s", tostring(faction), best_target:name())
+        end
+    end
+
+    if not best_target then
+        warfare_log.warn("emergency_resurrection_spawn: %s no target found, aborting", tostring(faction))
+        return false
+    end
+
+    -- Step 3: Find the closest valid spawn point to the selected target
+    -- Valid spawn: neutral/friendly territory/resource, OR any lair
+    local best_spawn = nil
+    local best_spawn_dist = nil
+
+    for _,v in pairs(levels) do
+        local chosen = v.key
+        local info = warfare_levels.level_information[chosen]
+
+        if (info) then
+            local smarts = info.smarts
+
+            for v,smart_id in pairs(smarts) do
+                local smart = alife_object(smart_id)
+
+                if (smart) then
+                    local is_valid_spawn = false
+
+                    if smart.props and smart.props.territory > 0 and smart.props.base < 1 and smart.props.resource < 1 then
+                        if smart.owning_faction == "none" or not game_relations.is_factions_enemies(smart.owning_faction, faction) then
+                            is_valid_spawn = true
+                        end
+                    elseif smart.props and smart.props.resource > 0 and smart.props.base < 1 then
+                        if smart.owning_faction == "none" or not game_relations.is_factions_enemies(smart.owning_faction, faction) then
+                            is_valid_spawn = true
+                        end
+                    elseif smart.props and smart.props.lair > 0 and smart.props.base < 1 and smart.props.resource < 1 and smart.props.territory < 1 then
+                        is_valid_spawn = true
+                    end
+
+                    if is_valid_spawn then
+                        local distance = smart_terrain_warfare.fetch_smart_distance(smart, best_target)
+                        if distance > 10000 and (best_spawn_dist == nil or distance < best_spawn_dist) then
+                            best_spawn_dist = distance
+                            best_spawn = smart
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if not best_spawn then
+        warfare_log.warn("emergency_resurrection_spawn: %s no valid spawn point found for target %s", tostring(faction), best_target:name())
+        return false
+    end
+
+    -- Step 4: Spawn squads at the selected spawn point targeting the selected base
+    local emergency_squad_count = math.max(4, math.ceil(best_target.max_population * 1.5))
+
+    warfare_log.info("emergency_resurrection: spawning %s squads for %s at %s (targeting %s)", tostring(emergency_squad_count), tostring(faction), best_spawn:name(), best_target:name())
+
+    for j=1,emergency_squad_count do
+        local section = faction_expansions.get_spawn_section(faction, faction_information[faction].resource_count)
+        local squad = warfare.spawn_squad(section, best_spawn:name())
+        if squad then
+            sim_squad_warfare.set_target(squad, best_target.id)
+            warfare_log.info("emergency_resurrection_spawn: %s spawned squad section=%s id=%s", tostring(faction), tostring(section), tostring(squad.id))
+        else
+            warfare_log.warn("emergency_resurrection_spawn: %s create_squad returned nil (section=%s at %s)", tostring(faction), tostring(section), best_spawn:name())
+        end
+    end
+
+    return true
+end
+
+-- Helper function to check if a smart terrain is a main faction base
+function is_main_faction_base(smart, faction)
+    if not smart or not faction or faction == "none" then
+        warfare_log.trace("is_main_faction_base: invalid args smart=%s faction=%s", tostring(smart), tostring(faction))
+        return false
+    end
+
+    -- This is a simple heuristic - you may want to customize this
+    -- Main bases typically have high max_population and are bases (not resources)
+    if smart.props and smart.props.base and smart.props.base > 0 then
+        if smart.max_population and smart.max_population >= 8 then
+            return true
+        end
+
+        -- You can add specific smart terrain name checks here if needed
+        local name = smart:name()
+        if name then
+            -- Add main base names if you know them, e.g.:
+            -- if string.find(name, "bar_") or string.find(name, "freedom_base") then
+            --     return true
+            -- end
+        end
+    end
+
+    return false
+end
+
+
+

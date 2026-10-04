@@ -1,0 +1,308 @@
+local C = zf_core
+local KIND = 203
+local VERB = "zf:front"
+local CHUNK = 240
+local JOURNAL_SEND = 150
+local function squad_power(sq, f)
+    local ok, p = pcall(sim_offline_combat.calculate_squad_power, sq, f, true, true)
+    return ok and tonumber(p) or sq:npc_count()
+end
+local function factions()
+    local out, held = {}, {}
+    local ok, gar = pcall(zf_garrison.stats)
+    if not ok then gar = {} end
+    for _, sm in ipairs(C.smarts()) do
+        local o = sm.owning_faction
+        if o and C.human(o) then
+            held[o] = held[o] or { bases = 0, res = 0 }
+            if C.is_base(sm) then held[o].bases = held[o].bases + 1 else held[o].res = held[o].res + 1 end
+        end
+    end
+    for _, f in ipairs(C.war_factions()) do
+        local squads, power = 0, 0
+        for _, sq in ipairs(C.squads_of(f)) do
+            if not axr_companions.companion_squads[sq.id] then
+                squads = squads + 1
+                power = power + squad_power(sq, f)
+            end
+        end
+        local h = held[f] or { bases = 0, res = 0 }
+        local g = gar[f] or { held = 0, points = 0, dug = 0, low = 0, lvl2 = 0, lvl3 = 0 }
+        local art = 0
+        if zf_artillery.capable(f) then
+            local due = C.store("cd")["art_" .. f] or 0
+            art = due <= C.now() and -1 or math.ceil((due - C.now()) / C.HOUR)
+        end
+        out[#out + 1] = { f = f, bases = h.bases, res = h.res, squads = squads, power = math.floor(power), art = art,
+            capable = zf_artillery.capable(f) and 1 or 0, gh = g.held, gp = g.points, gd = g.dug, gl = g.low,
+            g2 = g.lvl2, g3 = g.lvl3 }
+    end
+    table.sort(out, function(a, b)
+        if a.power == b.power then return a.f < b.f end
+        return a.power > b.power
+    end)
+    for i, e in ipairs(out) do e.rank = i end
+    return out
+end
+local function relation(a, b)
+    local ok, v = pcall(relation_registry.community_relation, a, b)
+    return ok and tonumber(v) or 0
+end
+local function name_of(id)
+    local sm = id and alife_object(id)
+    return sm and C.smart_name(sm) or "?"
+end
+local function operations()
+    local out, t = {}, C.now()
+    for key, op in pairs(C.store("front")) do
+        local ago = (t - op.t) / C.HOUR
+        if ago > 24 then
+            C.store("front")[key] = nil
+        else
+            local sm = alife_object(op.target)
+            local state = sm and sm.owning_faction == op.f and "won" or (ago < 3 and "on" or "held")
+            out[#out + 1] = { f = op.f, def = op.def or "none", s = name_of(op.target), k = op.tactic,
+                h = math.floor(ago * 10) / 10, st = state }
+        end
+    end
+    table.sort(out, function(a, b) return a.h < b.h end)
+    return out
+end
+local function counters()
+    local out, t = {}, C.now()
+    for id, p in pairs(C.store("counter")) do
+        out[#out + 1] = { f = p.f, s = name_of(id), h = math.max(0, math.ceil((p.due - t) / C.HOUR)) }
+    end
+    return out
+end
+local function encircled()
+    local out, t = {}, C.now()
+    for id, e in pairs(C.store("encircled")) do
+        if e.until_t > t then out[#out + 1] = { f = e.def, s = name_of(id), h = math.ceil((e.until_t - t) / C.HOUR) } end
+    end
+    return out
+end
+local function pairs_of(store_name)
+    local out = {}
+    for key, n in pairs(C.store(store_name)) do
+        local a, b = key:match("^(.-)|(.+)$")
+        if a and n > 0 then out[#out + 1] = { a = a, b = b, n = n } end
+    end
+    return out
+end
+local function player_label(key)
+    if key == "host" or not key then
+        local ok, n = pcall(function() return db.actor:character_name() end)
+        return ok and n or "host"
+    end
+    local xp = XrrPlayers and XrrPlayers()
+    for i = 1, xp and xp:GetPeerCount() or 0 do
+        if tostring(xp:GetPeerNetidAt(i)) == key then return xp:GetPeerNicknameAt(i) end
+    end
+    return key
+end
+local function people()
+    local out, owners = {}, C.store("comp_owner")
+    for id, e in pairs(C.store("errands")) do
+        if e.comp or e.hired then
+            local tgt = alife_object(e.target or -1)
+            out[#out + 1] = { o = player_label(e.owner), n = e.name or "?", f = e.f, k = e.hired and "hired" or e.kind,
+                ph = e.phase or "go",
+                s = tgt and (tgt:clsid() == clsid.smart_terrain and C.smart_name(tgt) or C.name_of(tgt.id)) or "",
+                q = e.title or "" }
+        end
+    end
+    for id in pairs(axr_companions.companion_squads) do
+        local sq = C.live_squad(id)
+        if sq and not C.store("errands")[id] then
+            local cmd = level.object_by_id(sq:commander_id())
+            local waiting = cmd and cmd:has_info("npcx_beh_wait")
+            out[#out + 1] = { o = player_label(owners[id]), n = C.name_of(sq:commander_id()), f = sq:get_squad_community(),
+                k = waiting and "wait" or "follow", ph = "", s = tostring(sq:npc_count()), q = "" }
+        end
+    end
+    return out
+end
+function snapshot()
+    local ok, traders = pcall(zf_traders.list)
+    local strike = zf_artillery.strike_status and zf_artillery.strike_status() or {}
+    return {
+        me = warfare.actor_faction or "stalker",
+        now = C.now(),
+        strike_cost = strike.cost or 0, strike_h = strike.h or 0,
+        factions = factions(),
+        rel = (function()
+            local out, fs = {}, C.war_factions()
+            for i = 1, #fs do
+                for j = i + 1, #fs do out[#out + 1] = { a = fs[i], b = fs[j], v = relation(fs[i], fs[j]) } end
+            end
+            return out
+        end)(),
+        ops = operations(), counters = counters(), encircled = encircled(),
+        pow = pairs_of("pow"), losses = pairs_of("losses"),
+        traders = ok and traders or {},
+        people = people(),
+        posts = (function() local ok2, l = pcall(zf_garrison.list) return ok2 and l or {} end)(),
+        marks = (function() local ok3, l = pcall(zf_encounters.marks) return ok3 and l or {} end)(),
+        journal = C.store("journal"),
+    }
+end
+local function clean(v)
+    return (tostring(v == nil and "" or v):gsub("[\t\r\n]", " "))
+end
+local function line(t, ...)
+    local f = { ... }
+    for i = 1, select("#", ...) do f[i] = clean(f[i]) end
+    t[#t + 1] = table.concat(f, "\t")
+end
+function encode(s, since)
+    local t = {}
+    line(t, "H", s.me, s.now, s.strike_cost, s.strike_h)
+    for _, e in ipairs(s.factions) do
+        line(t, "F", e.f, e.bases, e.res, e.squads, e.power, e.rank, e.art, e.capable, e.gh, e.gp, e.gd, e.gl, e.g2, e.g3)
+    end
+    for _, e in ipairs(s.posts or {}) do line(t, "G", e.f, e.s, e.lvl, e.n, e.fort, e.sup, e.tr, e.fr) end
+    for _, e in ipairs(s.rel) do line(t, "R", e.a, e.b, e.v) end
+    for _, e in ipairs(s.ops) do line(t, "O", e.f, e.def, e.s, e.k, e.h, e.st) end
+    for _, e in ipairs(s.counters) do line(t, "C", e.f, e.s, e.h) end
+    for _, e in ipairs(s.encircled) do line(t, "E", e.f, e.s, e.h) end
+    for _, e in ipairs(s.pow) do line(t, "P", e.a, e.b, e.n) end
+    for _, e in ipairs(s.losses) do line(t, "L", e.a, e.b, e.n) end
+    for _, e in ipairs(s.traders) do
+        line(t, "T", e.name, e.type, e.tier, e.scope, e.f, e.s, e.lvl, e.guards, e.mercs, e.h, e.known and 1 or 0,
+            e.marked and 1 or 0, e.sid)
+    end
+    for _, e in ipairs(s.people) do line(t, "M", e.o, e.n, e.f, e.k, e.ph, e.s, e.q) end
+    for _, e in ipairs(s.marks or {}) do line(t, "K", e.sid, e.tag, e.f) end
+    local j, first = s.journal, 1
+    if #j > JOURNAL_SEND then first = #j - JOURNAL_SEND + 1 end
+    for i = first, #j do
+        local e = j[i]
+        if (e.t or 0) > (since or -1) then line(t, "J", e.d, e.t, e.c, e.f, e.s, e.n, e.x) end
+    end
+    return table.concat(t, "\n")
+end
+local function num(v) return tonumber(v) or 0 end
+local function opt(v) if v ~= "" then return v end end
+function decode(text)
+    local s = { factions = {}, rel = {}, ops = {}, counters = {}, encircled = {}, pow = {}, losses = {}, traders = {},
+        people = {}, journal = {}, posts = {}, marks = {} }
+    for l in (text .. "\n"):gmatch("([^\n]*)\n") do
+        local f = {}
+        for v in (l .. "\t"):gmatch("([^\t]*)\t") do f[#f + 1] = v end
+        local k = f[1]
+        if k == "H" then
+            s.me, s.now, s.strike_cost, s.strike_h = f[2], num(f[3]), num(f[4]), num(f[5])
+        elseif k == "F" then
+            s.factions[#s.factions + 1] = { f = f[2], bases = num(f[3]), res = num(f[4]), squads = num(f[5]),
+                power = num(f[6]), rank = num(f[7]), art = num(f[8]), capable = num(f[9]),
+                gh = num(f[10]), gp = num(f[11]), gd = num(f[12]), gl = num(f[13]), g2 = num(f[14]), g3 = num(f[15]) }
+        elseif k == "G" then
+            s.posts[#s.posts + 1] = { f = f[2], s = f[3], lvl = num(f[4]), n = num(f[5]), fort = num(f[6]), sup = num(f[7]),
+                tr = f[8] or "", fr = num(f[9]) }
+        elseif k == "R" then
+            s.rel[#s.rel + 1] = { a = f[2], b = f[3], v = num(f[4]) }
+        elseif k == "O" then
+            s.ops[#s.ops + 1] = { f = f[2], def = f[3], s = f[4], k = f[5], h = num(f[6]), st = f[7] }
+        elseif k == "C" or k == "E" then
+            local list = k == "C" and s.counters or s.encircled
+            list[#list + 1] = { f = f[2], s = f[3], h = num(f[4]) }
+        elseif k == "P" or k == "L" then
+            local list = k == "P" and s.pow or s.losses
+            list[#list + 1] = { a = f[2], b = f[3], n = num(f[4]) }
+        elseif k == "T" then
+            s.traders[#s.traders + 1] = { name = f[2], type = f[3], tier = num(f[4]), scope = f[5], f = f[6], s = f[7],
+                lvl = f[8], guards = num(f[9]), mercs = num(f[10]), h = num(f[11]), known = f[12] == "1",
+                marked = f[13] == "1", sid = num(f[14]) }
+        elseif k == "K" then
+            s.marks[#s.marks + 1] = { sid = num(f[2]), tag = f[3], f = f[4] }
+        elseif k == "M" then
+            s.people[#s.people + 1] = { o = f[2], n = f[3], f = f[4], k = f[5], ph = f[6], s = f[7], q = f[8] }
+        elseif k == "J" then
+            s.journal[#s.journal + 1] = { d = f[2], t = num(f[3]), c = f[4], f = f[5], s = opt(f[6]), n = opt(f[7]), x = f[8] }
+        end
+    end
+    return s
+end
+local cache, cache_t = nil, -1
+local function current()
+    local t = time_global()
+    if not cache or t - cache_t > 5000 then
+        cache, cache_t = snapshot(), t
+    end
+    return cache
+end
+local seq = 0
+function serve(args, netid)
+    seq = seq % 9999 + 1
+    local data = encode(current(), tonumber(args) or -1)
+    local n = math.max(1, math.ceil(#data / CHUNK))
+    for i = 1, n do
+        C.to_peer(netid, KIND, seq .. "|" .. i .. "|" .. n .. "|" .. data:sub((i - 1) * CHUNK + 1, i * CHUNK))
+    end
+    C.log("front: %d bytes to peer %s in %d pieces", #data, tostring(netid), n)
+end
+local got = nil
+local incoming = {}
+local asked = -1
+local listeners = {}
+function on_update(fn)
+    listeners[#listeners + 1] = fn
+end
+local function journal_since()
+    local j = got and got.journal
+    return j and #j > 0 and j[#j].t or -1
+end
+function request(force)
+    local t = time_global()
+    if not force and t - asked < 3000 then return end
+    asked = t
+    C.peer_intent(VERB, tostring(journal_since()))
+end
+local function received(s)
+    local old = got and got.journal or {}
+    if #old > 0 and old[#old].t > s.now then old = {} end
+    for _, e in ipairs(s.journal) do old[#old + 1] = e end
+    while #old > 300 do table.remove(old, 1) end
+    s.journal = old
+    got = s
+    for _, fn in ipairs(listeners) do
+        local ok, err = pcall(fn, s)
+        if not ok then C.warn("front listener: %s", err) end
+    end
+end
+local function on_piece(arg)
+    local sq, i, n, data = tostring(arg):match("^(%d+)|(%d+)|(%d+)|(.*)$")
+    if not sq then return end
+    i, n = tonumber(i), tonumber(n)
+    local inc = incoming[sq]
+    if not inc then
+        inc = { n = n, have = 0, parts = {} }
+        incoming[sq] = inc
+    end
+    if not inc.parts[i] then
+        inc.parts[i] = data
+        inc.have = inc.have + 1
+    end
+    if inc.have < inc.n then return end
+    incoming = {}
+    received(decode(table.concat(inc.parts, "", 1, inc.n)))
+end
+function get()
+    if C.peer() then
+        request()
+        return got
+    end
+    return current()
+end
+function refresh()
+    cache = nil
+    if C.peer() then request(true) end
+end
+function on_game_start()
+    C.on_peer_intent(VERB, serve)
+    C.on_peer_msg(KIND, on_piece)
+    C.every_anywhere("zf_front_peer", 30, function()
+        if C.peer() then request() end
+    end)
+end

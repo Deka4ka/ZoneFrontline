@@ -1,0 +1,293 @@
+local C = zf_core
+function capable(f)
+    return C.cfg_set("artillery_factions", "army, dolg, monolith, killer, isg")[f] == true
+end
+local queue = {}
+local function live_near(sm)
+    local lid, r = C.level_of(sm), C.cfg("art_live_radius", 400)
+    for _, p in ipairs(C.players()) do
+        if C.player_level(p) == lid and p:position():distance_to(sm.position) <= r then
+            return true
+        end
+    end
+    return false
+end
+local function spawn_shell(e)
+    local p, gvid, fallback
+    if e.pos then
+        p, gvid = vector():set(e.pos.x, e.pos.y, e.pos.z), e.gvid
+    else
+        local sm = alife_object(e.smart)
+        if not sm then return end
+        p, gvid, fallback = sm.position, sm.m_game_vertex_id, sm.m_level_vertex_id
+    end
+    local a, r = math.random() * 2 * math.pi, math.sqrt(math.random()) * e.scatter
+    local lvid = level.vertex_id(vector():set(p.x + math.cos(a) * r, p.y, p.z + math.sin(a) * r))
+    if not lvid or lvid >= 4294967295 then lvid = fallback or level.vertex_id(p) end
+    if not lvid or lvid >= 4294967295 then return end
+    local se = alife_create(C.cfg("art_shell_section", "rpg_new_blow"),
+        level.vertex_position(lvid), lvid, gvid)
+    if se then
+        queue[#queue + 1] = { id = se.id, deadline = time_global() + 5000 }
+        C.store("shells")[se.id] = true
+    end
+end
+local function done(id)
+    C.store("shells")[id] = nil
+end
+local function process_queue()
+    local t = time_global()
+    for i = #queue, 1, -1 do
+        local e = queue[i]
+        if e.smart or e.pos then
+            if t >= e.at then
+                table.remove(queue, i)
+                spawn_shell(e)
+            end
+        else
+            local obj = level.object_by_id(e.id)
+            if obj then
+                table.remove(queue, i)
+                done(e.id)
+                obj:explode(0)
+            elseif t >= e.deadline then
+                table.remove(queue, i)
+                done(e.id)
+                if alife_object(e.id) then alife_release_id(e.id) end
+            end
+        end
+    end
+    local queued = {}
+    for _, e in ipairs(queue) do
+        if e.id then queued[e.id] = true end
+    end
+    for id in pairs(C.store("shells")) do
+        if not queued[id] then
+            done(id)
+            local se = alife_object(id)
+            local sec = se and se:section_name()
+            if sec == C.cfg("art_shell_section", "rpg_new_blow") or sec == "zf_mortar_shell" then alife_release(se) end
+        end
+    end
+end
+function blast(pos, gvid, delay_ms)
+    queue[#queue + 1] = { pos = { x = pos.x, y = pos.y, z = pos.z }, gvid = gvid, scatter = 0,
+        at = time_global() + (delay_ms or 0) }
+end
+function fire_mission(f, pos, gvid)
+    if not capable(f) or not C.ready("fire_" .. f) then return false end
+    C.cooldown("fire_" .. f, C.cfg("fire_mission_cooldown_h", 3))
+    local gap, scatter, t = C.cfg("art_shell_interval", 2.5), C.cfg("fire_mission_scatter", 20), time_global()
+    local lo = C.cfg("fire_mission_shells", 5)
+    for i = 1, math.random(lo, lo + 3) do
+        queue[#queue + 1] = { pos = { x = pos.x, y = pos.y, z = pos.z }, gvid = gvid, scatter = scatter,
+            at = t + (10 + i * gap * C.rand(0.6, 1.4)) * 1000 }
+    end
+    C.report("war", f, true, "zf_news_fire_mission", nil, "danger", C.faction_name(f))
+    C.log("fire mission: %s on %.0f,%.0f", f, pos.x, pos.z)
+    return true
+end
+local function casualties(sm, owner, shells)
+    local members = {}
+    local board = SIMBOARD.smarts[sm.id]
+    for sid in pairs(board and board.squads or {}) do
+        local sq = alife_object(sid)
+        if sq and sq:clsid() == clsid.online_offline_group_s and sq:get_squad_community() == owner
+           and warfare.owns_section(sq:section_name()) then
+            for m in sq:squad_members() do
+                if not get_object_story_id(m.id) then members[#members + 1] = { sq = sq, id = m.id } end
+            end
+        end
+    end
+    local p = math.min(0.9, C.cfg("art_kill_chance", 0.1) * shells / 8)
+    local max, dead = C.cfg("art_kill_max", 3), 0
+    for _, e in ipairs(members) do
+        if dead >= max then break end
+        if math.random() < p then
+            e.sq:remove_npc(e.id, true)
+            dead = dead + 1
+        end
+    end
+    return dead
+end
+function strike(sm, f, counter)
+    local owner = sm.owning_faction or "none"
+    local lo = C.cfg("art_shells_min", 6)
+    local shells = math.random(lo, math.max(lo, C.cfg("art_shells_max", 14)))
+    C.cooldown("art_" .. f, C.cfg("art_cooldown_h", 36))
+    if owner == warfare.actor_faction then
+        C.report("war", { f, owner }, true, "zf_news_art_def", owner, "danger", C.smart_name(sm), C.faction_name(f))
+    else
+        C.report("war", { f, owner }, C.relevant(sm, f, owner), "zf_news_art", f, "news", C.smart_name(sm),
+            C.faction_name(owner))
+    end
+    if live_near(sm) then
+        local gap, scatter, t = C.cfg("art_shell_interval", 2.5), C.cfg("art_scatter", 35), time_global()
+        for i = 1, shells do
+            queue[#queue + 1] = { smart = sm.id, scatter = scatter,
+                at = t + (3 + i * gap * C.rand(0.6, 1.4)) * 1000 }
+        end
+        C.log("artillery: %s shells %s live, %d shells", f, sm:name(), shells)
+    else
+        local dead = casualties(sm, owner, shells)
+        C.log("artillery: %s shells %s offline, %d killed", f, sm:name(), dead)
+        if dead > 0 then
+            C.report("war", { f, owner }, f == warfare.actor_faction, "zf_news_art_hits", f, "news", C.smart_name(sm), dead)
+        end
+    end
+    if C.human(owner) then
+        C.store("grudge")[owner] = { vs = f, until_t = C.now() + C.cfg("grudge_h", 48) * C.HOUR }
+        zf_diplomacy.grievance(owner, f, C.cfg("art_grievance", 250))
+    end
+    if not counter and capable(owner) and C.ready("art_" .. owner)
+       and math.random() < C.cfg("counter_battery_chance", 0.5) then
+        local tp = C.smart_gpos(sm)
+        local battery = tp and C.nearest_own_base(f, tp)
+        if battery then
+            C.log("counter-battery: %s answers %s at %s", owner, f, battery:name())
+            C.report("war", { owner, f }, C.relevant(battery, owner, f), "zf_news_counter_battery", owner, "news",
+                C.smart_name(battery))
+            strike(battery, owner, true)
+        end
+    end
+end
+local cursor = 0
+local function run()
+    local list = C.war_factions()
+    if #list == 0 then return end
+    cursor = cursor % #list + 1
+    local f = list[cursor]
+    if not capable(f) or not C.ready("art_" .. f) or math.random() > C.cfg("art_chance", 0.15) then return end
+    local batteries, targets = {}, {}
+    for _, sm in ipairs(C.smarts()) do
+        if C.is_base(sm) then
+            local o = sm.owning_faction
+            if o == f then
+                batteries[#batteries + 1] = sm
+            elseif C.human(o) and C.enemies(f, o) and not C.protected(sm) then
+                targets[#targets + 1] = sm
+            end
+        end
+    end
+    local grudge = C.store("grudge")[f]
+    local vs = grudge and grudge.until_t > C.now() and grudge.vs
+    local r2, in_range, revenge = C.cfg("art_range", 1500) ^ 2, {}, {}
+    for _, t in ipairs(targets) do
+        local tp = C.smart_gpos(t)
+        for _, b in ipairs(batteries) do
+            local bp = C.smart_gpos(b)
+            if tp and bp and C.d2(tp, bp) <= r2 then
+                in_range[#in_range + 1] = t
+                if t.owning_faction == vs then revenge[#revenge + 1] = t end
+                break
+            end
+        end
+    end
+    local pool = #revenge > 0 and revenge or in_range
+    if #pool > 0 then strike(pool[math.random(#pool)], f) end
+end
+local function strike_cost()
+    local base = C.cfg("strike_cost", 25000)
+    return math.floor(capable(warfare.actor_faction) and base * 0.7 or base)
+end
+function strike_status()
+    local due = C.store("cd").player_strike or 0
+    return { cost = strike_cost(), h = due > C.now() and math.ceil((due - C.now()) / C.HOUR) or 0 }
+end
+local function menu_text()
+    local st = strike_status()
+    if st.h > 0 then return C.text("zf_strike_menu_wait", nil, st.h) end
+    return C.text("zf_strike_menu", nil, st.cost)
+end
+local function strike_target(obj)
+    if not obj then return end
+    local c = obj:clsid()
+    if c == clsid.smart_terrain then return obj, obj.owning_faction end
+    if c == clsid.online_offline_group_s and not axr_companions.companion_squads[obj.id] and obj:npc_count() > 0 then
+        return obj, obj:get_squad_community()
+    end
+end
+local function map_menu(ui, id)
+    if not (C.active() and C.cfg("strike_enabled", true)) then return end
+    if strike_target(alife_object(id)) then ui:AddItem(menu_text()) end
+end
+local function order(obj, owner)
+    if strike_status().h > 0 then return end
+    local cost = strike_cost()
+    if db.actor:money() < cost then
+        C.local_news("zf_strike_no_money", nil, "news", cost)
+        return
+    end
+    db.actor:give_money(-cost)
+    C.cooldown("player_strike", C.cfg("strike_cooldown_h", 2))
+    local delay = C.cfg("strike_delay_min", 5) * 60
+    C.store("strikes")[obj.id] = { due = C.now() + delay, owner = owner }
+    local where = obj:clsid() == clsid.smart_terrain and C.smart_name(obj) or C.text("zf_strike_squad", nil, C.faction_name(owner))
+    local own = capable(warfare.actor_faction)
+    C.report("war", { warfare.actor_faction, owner }, true, own and "zf_strike_ordered" or "zf_strike_ordered_hired",
+        own and warfare.actor_faction or nil, "news", where, math.floor(delay / 60))
+    C.log("player strike ordered on %s (%s), %d RU", obj:name(), tostring(owner), cost)
+end
+local function map_click(ui, id, level_name, prop)
+    if not (C.active() and prop == menu_text()) then return end
+    local obj, owner = strike_target(alife_object(id))
+    if obj then order(obj, owner) end
+end
+local function deliver(id, s)
+    local obj = alife_object(id)
+    if not obj then return end
+    local is_smart = obj:clsid() == clsid.smart_terrain
+    local pos, lid = obj.position, is_smart and C.smart_level(obj) or C.level_of(obj)
+    local shells, live = C.cfg("strike_shells", 8), false
+    for _, p in ipairs(C.players()) do
+        if C.player_level(p) == lid and p:position():distance_to(pos) <= C.cfg("art_live_radius", 400) then live = true end
+    end
+    local where = is_smart and C.smart_name(obj) or C.text("zf_strike_squad", nil, C.faction_name(s.owner))
+    if live then
+        local gap, t = C.cfg("art_shell_interval", 2.5), time_global()
+        for i = 1, shells do
+            queue[#queue + 1] = { pos = { x = pos.x, y = pos.y, z = pos.z }, gvid = obj.m_game_vertex_id,
+                scatter = C.cfg("art_scatter", 35), at = t + (2 + i * gap * C.rand(0.6, 1.4)) * 1000 }
+        end
+    else
+        local dead = 0
+        if is_smart and s.owner then
+            dead = casualties(obj, s.owner, shells)
+        elseif not is_smart then
+            local p = math.min(0.9, C.cfg("art_kill_chance", 0.1) * shells / 4)
+            local ids = {}
+            for m in obj:squad_members() do ids[#ids + 1] = m.id end
+            for _, mid in ipairs(ids) do
+                if obj:npc_count() > 1 and math.random() < p and not get_object_story_id(mid) then
+                    obj:remove_npc(mid, true)
+                    dead = dead + 1
+                end
+            end
+        end
+        C.report("war", { warfare.actor_faction, s.owner }, true, "zf_strike_done", nil, "news", where, dead)
+    end
+    if C.human(s.owner) and s.owner ~= warfare.actor_faction then
+        zf_diplomacy.grievance(s.owner, warfare.actor_faction, C.cfg("art_grievance", 250))
+    end
+    C.log("player strike on %s: %s", obj:name(), live and "live" or "on paper")
+end
+local function strikes_due()
+    local t = C.now()
+    for id, s in pairs(C.store("strikes")) do
+        if t >= s.due then
+            C.store("strikes")[id] = nil
+            local ok, err = pcall(deliver, id, s)
+            if not ok then C.warn("player strike: %s", err) end
+        end
+    end
+end
+function on_game_start()
+    C.every("zf_artillery", 60, run)
+    C.every("zf_artillery_fx", 0.2, process_queue, true)
+    C.every("zf_artillery_orders", 2, strikes_due, true)
+    RegisterScriptCallback("map_spot_menu_add_property", function(ui, id) pcall(map_menu, ui, id) end)
+    RegisterScriptCallback("map_spot_menu_property_clicked", function(ui, id, lvl, prop)
+        local ok, err = pcall(map_click, ui, id, lvl, prop)
+        if not ok then C.warn("strike menu: %s", err) end
+    end)
+end

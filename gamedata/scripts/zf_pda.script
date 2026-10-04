@@ -1,0 +1,435 @@
+local C = zf_core
+local F = zf_front
+local PAGES = { "summary", "posts", "diplomacy", "journal", "traders", "people" }
+local FILTERS = { "all", "war", "dip", "event", "life", "fauna", "trade", "people" }
+local JOURNAL_ROWS = 120
+local function clr(r, g, b) return string.format("%%c[255,%d,%d,%d]", r, g, b) end
+local WHITE, GREY, DIM = clr(230, 230, 230), clr(160, 160, 160), clr(115, 115, 115)
+local RED, YELLOW, GREEN, BLUE, GOLD = clr(235, 85, 70), clr(235, 200, 90), clr(110, 220, 110), clr(120, 175, 245), clr(225, 205, 150)
+local DEF = "%c[default]"
+local function tr(id, ...)
+    return C.text(id, nil, ...)
+end
+local function fname(f)
+    return f and f ~= "" and f ~= "none" and game.translate_string(f) or tr("zf_pda_nobody")
+end
+local function stance(s, a, b)
+    if a == b then return "own", 5000 end
+    local v = 0
+    for _, r in ipairs(s.rel) do
+        if (r.a == a and r.b == b) or (r.a == b and r.b == a) then v = r.v break end
+    end
+    if v <= -1000 then return "enemy", v end
+    if v >= 1000 then return "friend", v end
+    return "neutral", v
+end
+local STANCE_CLR = { own = BLUE, enemy = RED, neutral = YELLOW, friend = GREEN }
+local function painted(s, f, me)
+    return (STANCE_CLR[stance(s, me, f)] or WHITE) .. fname(f) .. DEF
+end
+local function my_faction()
+    local ok, f = pcall(get_actor_true_community)
+    return ok and f or nil
+end
+local function about(e, f)
+    return f == nil or ("," .. (e.f or "") .. ","):find("," .. f .. ",", 1, true) ~= nil
+end
+local SINGLETON = nil
+function get_ui()
+    SINGLETON = SINGLETON or zf_pda_tab()
+    SINGLETON:Reset()
+    return SINGLETON
+end
+class "zf_pda_tab" (CUIScriptWnd)
+function zf_pda_tab:__init() super()
+    self.page, self.filter, self.whole_zone = "summary", "all", false
+    self.faction = nil
+    self.page_btn, self.filter_btn = {}, {}
+    self:InitControls()
+end
+function zf_pda_tab:__finalize()
+end
+function zf_pda_tab:InitControls()
+    self:SetWndRect(Frect():set(0, 0, 1024, 768))
+    local xml = CScriptXmlInit()
+    self.xml = xml
+    xml:ParseFile("zf_pda.xml")
+    xml:InitFrame("frame_head", self)
+    xml:InitFrame("frame_body", self)
+    self.icon = xml:InitStatic("icon", self)
+    self.title = xml:InitTextWnd("title", self)
+    self.stats = {}
+    for i = 1, 3 do self.stats[i] = xml:InitTextWnd("stats_" .. i, self) end
+    local function button(id, node, fn)
+        local b = xml:Init3tButton(node, self)
+        self:Register(b, id)
+        self:AddCallback(id, ui_events.BUTTON_CLICKED, fn, self)
+        return b
+    end
+    button("zf_mine", "btn_mine", function() self.faction = nil; self:Rebuild(true) end)
+    button("zf_prev", "btn_prev", function() self:Step(-1) end)
+    button("zf_next", "btn_next", function() self:Step(1) end)
+    for i, p in ipairs(PAGES) do
+        local b = button("zf_page_" .. p, "btn_page", function() self.page = p; self:Rebuild(true) end)
+        b:SetWndPos(vector2():set(28 + (i - 1) * 127, 186))
+        b:TextControl():SetText(tr("zf_pda_page_" .. p))
+        self.page_btn[p] = b
+    end
+    for i, k in ipairs(FILTERS) do
+        local b = button("zf_filter_" .. k, "btn_filter", function() self.filter = k; self:Rebuild(true) end)
+        b:SetWndPos(vector2():set(36 + (i - 1) * 72, 222))
+        b:TextControl():SetText(tr("zf_pda_filter_" .. k))
+        self.filter_btn[k] = b
+    end
+    self.zone_btn = button("zf_zone", "btn_filter", function() self.whole_zone = not self.whole_zone; self:Rebuild(true) end)
+    self.zone_btn:SetWndPos(vector2():set(36 + #FILTERS * 72 + 6, 222))
+    self.zone_btn:SetWndSize(vector2():set(748 - #FILTERS * 72 - 6, 24))
+    self.scroll = xml:InitScrollView("scroll", self)
+    self.scroll_f = xml:InitScrollView("scroll_filtered", self)
+    F.on_update(function()
+        if self:IsShown() then self:Rebuild(false) end
+    end)
+end
+function zf_pda_tab:Reset()
+    F.refresh()
+    self:Rebuild(true)
+end
+function zf_pda_tab:Factions(s)
+    local list = {}
+    for _, e in ipairs(s.factions) do list[#list + 1] = e.f end
+    return list
+end
+function zf_pda_tab:Step(d)
+    local s = F.get()
+    if not s then return end
+    local list = self:Factions(s)
+    if #list == 0 then return end
+    local cur = self.faction or s.me
+    local i = 1
+    for k, f in ipairs(list) do
+        if f == cur then i = k end
+    end
+    self.faction = list[(i - 1 + d) % #list + 1]
+    self:Rebuild(true)
+end
+function zf_pda_tab:List()
+    return self.page == "journal" and self.scroll_f or self.scroll
+end
+function zf_pda_tab:Add(st)
+    self:List():AddWindow(st, true)
+    st:SetAutoDelete(true)
+end
+function zf_pda_tab:Line(text)
+    local st = self.xml:InitStatic("row", nil)
+    local t = self.xml:InitTextWnd("row_text", st)
+    t:SetText(text)
+    t:AdjustHeightToText()
+    st:SetWndSize(vector2():set(st:GetWidth(), t:GetHeight() + 3))
+    self:Add(st)
+end
+function zf_pda_tab:Head(text)
+    local st = self.xml:InitStatic("row", nil)
+    st:SetWndSize(vector2():set(st:GetWidth(), 34))
+    self.xml:InitStatic("row_line", st)
+    local t = self.xml:InitTextWnd("row_head", st)
+    t:SetText(text)
+    self:Add(st)
+end
+function zf_pda_tab:Empty(id)
+    self:Line(DIM .. tr(id) .. DEF)
+end
+local function few(names)
+    if #names == 0 then return DIM .. tr("zf_pda_nobody") .. DEF end
+    if #names <= 4 then return table.concat(names, ", ") end
+    return table.concat(names, ", ", 1, 4) .. " " .. tr("zf_pda_and_more", #names - 4)
+end
+function zf_pda_tab:Header(s, f)
+    local e
+    for _, x in ipairs(s.factions) do
+        if x.f == f then e = x end
+    end
+    pcall(function()
+        self.icon:InitTexture("ui_inGame4_ico_" .. f)
+        self.icon:SetStretchTexture(true)
+    end)
+    self.title:SetText(fname(f) .. (f == s.me and ("  " .. tr("zf_pda_yours")) or ""))
+    if not e then
+        self:Stats(GREY .. tr("zf_pda_no_faction") .. DEF, "", "")
+        return
+    end
+    local wars, allies = {}, {}
+    for _, x in ipairs(s.factions) do
+        if x.f ~= f then
+            local st = stance(s, f, x.f)
+            if st == "enemy" then wars[#wars + 1] = RED .. fname(x.f) .. DEF end
+            if st == "friend" then allies[#allies + 1] = GREEN .. fname(x.f) .. DEF end
+        end
+    end
+    local line1 = tr("zf_pda_stats", WHITE .. e.rank .. DEF, #s.factions, WHITE .. (e.bases + e.res) .. DEF,
+        WHITE .. e.bases .. DEF, WHITE .. e.squads .. DEF)
+    self:Stats(line1, tr("zf_pda_wars", few(wars)), tr("zf_pda_allies", few(allies)))
+end
+function zf_pda_tab:Stats(a, b, c)
+    self.stats[1]:SetText(a)
+    self.stats[2]:SetText(b)
+    self.stats[3]:SetText(c)
+end
+local function hours(h)
+    if h < 1 then return tr("zf_pda_now") end
+    return tr("zf_pda_hours", math.floor(h + 0.5))
+end
+function zf_pda_tab:Summary(s, f)
+    local me = s.me
+    self:Head(GOLD .. tr("zf_pda_h_ops") .. DEF)
+    local n = 0
+    for _, o in ipairs(s.ops) do
+        if o.f == f or o.def == f then
+            n = n + 1
+            local att = o.f == f
+            local side = att and tr("zf_pda_attack") or tr("zf_pda_defence")
+            local good = (o.st == "won") == att
+            local st = o.st == "on" and YELLOW or (good and GREEN or RED)
+            local how = st .. tr("zf_pda_op_" .. (att and "att_" or "def_") .. o.st) .. DEF
+            if o.k == "recon" and o.st ~= "won" then how = GREY .. tr("zf_pda_op_recon") .. DEF end
+            self:Line(tr("zf_pda_op", WHITE .. side .. DEF, painted(s, o.f, me), WHITE .. o.s .. DEF,
+                painted(s, o.def, me), game.translate_string("zf_tactic_" .. o.k), GREY .. hours(o.h) .. DEF, how))
+        end
+    end
+    if n == 0 then self:Empty("zf_pda_none_ops") end
+    local plans = {}
+    for _, c in ipairs(s.counters) do
+        if c.f == f then plans[#plans + 1] = tr("zf_pda_counter", WHITE .. c.s .. DEF, GREY .. tr("zf_pda_in_hours", c.h) .. DEF) end
+    end
+    for _, c in ipairs(s.encircled) do
+        if c.f == f then plans[#plans + 1] = RED .. tr("zf_pda_encircled", c.s, c.h) .. DEF end
+    end
+    if #plans > 0 then
+        self:Head(GOLD .. tr("zf_pda_h_plans") .. DEF)
+        for _, l in ipairs(plans) do self:Line(l) end
+    end
+    local g
+    for _, x in ipairs(s.factions) do if x.f == f then g = x end end
+    if g and (g.gp or 0) > 0 then
+        self:Head(GOLD .. tr("zf_pda_h_garrison") .. DEF)
+        local share = g.gh / g.gp
+        self:Line(tr("zf_pda_garrison", (share >= 0.75 and GREEN or share >= 0.4 and YELLOW or RED) .. g.gh .. DEF,
+            WHITE .. g.gp .. DEF, WHITE .. g.gd .. DEF))
+        if (g.gl or 0) > 0 then self:Line(YELLOW .. tr("zf_pda_garrison_low", g.gl) .. DEF) end
+        if (g.g2 or 0) + (g.g3 or 0) > 0 then self:Line(tr("zf_pda_garrison_dev", WHITE .. g.g2 .. DEF, WHITE .. g.g3 .. DEF)) end
+    end
+    self:Head(GOLD .. tr("zf_pda_h_art") .. DEF)
+    local e
+    for _, x in ipairs(s.factions) do if x.f == f then e = x end end
+    if e and e.capable == 1 then
+        self:Line(e.art < 0 and GREEN .. tr("zf_pda_art_ready") .. DEF or YELLOW .. tr("zf_pda_art_wait", e.art) .. DEF)
+    else
+        self:Empty("zf_pda_art_none")
+    end
+    if f == me and (s.strike_cost or 0) > 0 then
+        self:Line(tr("zf_pda_strike", WHITE .. s.strike_cost .. DEF,
+            s.strike_h > 0 and YELLOW .. tr("zf_pda_in_hours", s.strike_h) .. DEF or GREEN .. tr("zf_pda_strike_ready") .. DEF))
+    end
+    local held, lost = {}, {}
+    for _, p in ipairs(s.pow) do
+        if p.a == f then held[#held + 1] = painted(s, p.b, me) .. " " .. WHITE .. "x" .. p.n .. DEF end
+        if p.b == f then lost[#lost + 1] = painted(s, p.a, me) .. " " .. WHITE .. "x" .. p.n .. DEF end
+    end
+    if #held + #lost > 0 then
+        self:Head(GOLD .. tr("zf_pda_h_pow") .. DEF)
+        if #held > 0 then self:Line(tr("zf_pda_pow_held", table.concat(held, ", "))) end
+        if #lost > 0 then self:Line(tr("zf_pda_pow_lost", table.concat(lost, ", "))) end
+    end
+    local losses = {}
+    for _, l in ipairs(s.losses) do
+        if l.a == f or l.b == f then losses[#losses + 1] = { g = l.a == f and l.b or l.a, n = l.n } end
+    end
+    if #losses > 0 then
+        table.sort(losses, function(a, b) return a.n > b.n end)
+        self:Head(GOLD .. tr("zf_pda_h_losses") .. DEF)
+        for i = 1, math.min(6, #losses) do
+            self:Line(tr("zf_pda_losses", painted(s, losses[i].g, me), WHITE .. losses[i].n .. DEF))
+        end
+    end
+    self:Head(GOLD .. tr("zf_pda_h_latest") .. DEF)
+    local shown = 0
+    for i = #s.journal, 1, -1 do
+        local je = s.journal[i]
+        if about(je, f) then
+            self:Entry(s, je)
+            shown = shown + 1
+            if shown >= 8 then break end
+        end
+    end
+    if shown == 0 then self:Empty("zf_pda_none_events") end
+end
+function zf_pda_tab:Diplomacy(s, f)
+    local me = s.me
+    self:Head(GOLD .. tr("zf_pda_h_relations", fname(f)) .. DEF)
+    local rows = {}
+    for _, x in ipairs(s.factions) do
+        if x.f ~= f then
+            local st, v = stance(s, f, x.f)
+            rows[#rows + 1] = { f = x.f, st = st, v = v }
+        end
+    end
+    table.sort(rows, function(a, b) return a.v < b.v end)
+    for _, r in ipairs(rows) do
+        local st = self.xml:InitStatic("row", nil)
+        st:SetWndSize(vector2():set(st:GetWidth(), 24))
+        pcall(function()
+            local ic = self.xml:InitStatic("row_icon", st)
+            ic:InitTexture("ui_inGame4_ico_" .. r.f)
+            ic:SetStretchTexture(true)
+        end)
+        self.xml:InitTextWnd("row_label", st):SetText(painted(s, r.f, me))
+        self.xml:InitStatic("bar_back", st)
+        local bar = self.xml:InitProgressBar("bar_" .. r.st, st)
+        bar:SetProgressPos(math.max(2, math.min(100, (r.v + 5000) / 100)))
+        self.xml:InitTextWnd("row_value", st):SetText((STANCE_CLR[r.st] or WHITE) .. tr("zf_pda_stance_" .. r.st)
+            .. DEF .. GREY .. " (" .. math.floor(r.v) .. ")" .. DEF)
+        self:Add(st)
+    end
+    self:Head(GOLD .. tr("zf_pda_h_dip_news") .. DEF)
+    local shown = 0
+    for i = #s.journal, 1, -1 do
+        local je = s.journal[i]
+        if (je.c == "dip" or je.c == "event") and about(je, f) then
+            self:Entry(s, je)
+            shown = shown + 1
+            if shown >= 12 then break end
+        end
+    end
+    if shown == 0 then self:Empty("zf_pda_none_dip") end
+end
+local CAT_CLR = { war = RED, dip = BLUE, event = GOLD, life = GREEN, fauna = YELLOW, trade = clr(200, 160, 230),
+    people = clr(150, 210, 230) }
+function zf_pda_tab:Entry(s, e)
+    local who
+    if e.n then
+        who = WHITE .. e.n .. DEF
+    elseif e.s == "@" then
+        who = GREY .. tr("zf_hdr_intercept") .. DEF
+    elseif e.s then
+        who = (STANCE_CLR[stance(s, s.me, e.s)] or GREY) .. fname(e.s) .. DEF
+    end
+    self:Line(DIM .. e.d .. DEF .. "  " .. (CAT_CLR[e.c] or WHITE) .. "[" .. tr("zf_pda_filter_" .. (e.c or "all")) .. "]"
+        .. DEF .. " " .. (who and (who .. ": ") or "") .. e.x)
+end
+function zf_pda_tab:Journal(s, f)
+    for k, b in pairs(self.filter_btn) do
+        b:TextControl():SetTextColor(k == self.filter and GetARGB(255, 240, 210, 120) or GetARGB(255, 175, 175, 175))
+    end
+    self.zone_btn:TextControl():SetText(self.whole_zone and tr("zf_pda_whole_zone") or tr("zf_pda_only", fname(f)))
+    local shown = 0
+    for i = #s.journal, 1, -1 do
+        local e = s.journal[i]
+        if (self.filter == "all" or e.c == self.filter) and (self.whole_zone or about(e, f)) then
+            self:Entry(s, e)
+            shown = shown + 1
+            if shown >= JOURNAL_ROWS then break end
+        end
+    end
+    if shown == 0 then self:Empty("zf_pda_none_events") end
+end
+local LEVEL_CLR = { GREY, YELLOW, GREEN }
+function zf_pda_tab:Posts(s, f)
+    self:Head(GOLD .. tr("zf_pda_h_posts", fname(f)) .. DEF)
+    local n = 0
+    for _, p in ipairs(s.posts or {}) do
+        if p.f == f then
+            n = n + 1
+            local lvl = math.max(1, math.min(3, p.lvl))
+            local line = WHITE .. p.s .. DEF .. ", " .. (LEVEL_CLR[lvl] or WHITE) .. tr("zf_post_lvl_" .. lvl) .. DEF
+                .. (p.fr == 1 and (" " .. RED .. tr("zf_pda_post_front") .. DEF) or "")
+            self:Line(line)
+            local sup = p.sup < 25 and RED or p.sup < 50 and YELLOW or GREY
+            local detail = GREY .. tr("zf_pda_post_detail", p.n, p.fort) .. DEF .. " " .. sup .. tr("zf_pda_post_supply", p.sup) .. DEF
+            if p.tr ~= "" then detail = detail .. " " .. tr("zf_pda_post_trader", game.translate_string("zf_trader_" .. p.tr)) end
+            self:Line(detail)
+        end
+    end
+    if n == 0 then self:Empty("zf_pda_none_posts") end
+end
+function zf_pda_tab:Traders(s)
+    local me = s.me
+    local hidden = 0
+    self:Head(GOLD .. tr("zf_pda_h_traders") .. DEF)
+    for _, t in ipairs(s.traders) do
+        if t.known then
+            local scope = tr("zf_trade_scope_" .. t.scope, fname(t.f))
+            local ok = zf_traders.serves(t.scope, t.f, me)
+            self:Line(WHITE .. t.name .. DEF .. ", " .. game.translate_string("zf_trader_" .. t.type) .. " ("
+                .. game.translate_string("zf_trade_tier_" .. t.tier) .. "), " .. painted(s, t.f, me) .. ". "
+                .. (ok and GREEN or RED) .. scope .. DEF)
+            self:Line(GREY .. tr("zf_pda_trader_where", t.s, t.lvl, t.guards, t.mercs, hours(t.h))
+                .. (t.marked and (" " .. tr("zf_pda_marked")) or "") .. DEF)
+        else
+            hidden = hidden + 1
+        end
+    end
+    if hidden > 0 then self:Line(DIM .. tr("zf_pda_traders_rumor", hidden) .. DEF) end
+    if #s.traders == 0 then self:Empty("zf_pda_none_traders") end
+end
+function zf_pda_tab:People(s)
+    self:Head(GOLD .. tr("zf_pda_h_people") .. DEF)
+    for _, p in ipairs(s.people) do
+        local what
+        if p.k == "follow" or p.k == "wait" then
+            what = tr("zf_pda_people_" .. p.k, p.s)
+        elseif p.k == "quest" then
+            what = tr("zf_pda_people_quest", p.q, tr("zf_pda_phase_" .. (p.ph ~= "" and p.ph or "go")))
+        elseif p.k == "hired" then
+            what = tr("zf_pda_people_hired", p.q, tr("zf_pda_phase_" .. (p.ph ~= "" and p.ph or "go")))
+        else
+            what = tr("zf_pda_people_job", game.translate_string("zf_pda_job_" .. p.k), p.s,
+                tr("zf_pda_phase_" .. (p.ph ~= "" and p.ph or "go")))
+        end
+        self:Line(GREY .. "[" .. p.o .. "] " .. DEF .. WHITE .. p.n .. DEF .. " (" .. fname(p.f) .. "): " .. what)
+    end
+    if #s.people == 0 then self:Empty("zf_pda_none_people") end
+end
+function zf_pda_tab:Rebuild(to_top)
+    local list = self:List()
+    local pos = (not to_top) and list:GetCurrentScrollPos() or 0
+    self.scroll:Clear()
+    self.scroll_f:Clear()
+    local journal = self.page == "journal"
+    self.scroll:Show(not journal)
+    self.scroll_f:Show(journal)
+    for _, b in pairs(self.filter_btn) do b:Show(journal) end
+    self.zone_btn:Show(journal)
+    for p, b in pairs(self.page_btn) do
+        b:TextControl():SetTextColor(p == self.page and GetARGB(255, 240, 210, 120) or GetARGB(255, 190, 190, 190))
+    end
+    local s = F.get()
+    if not s then
+        self.title:SetText(tr("zf_pda_tab"))
+        self:Stats(GREY .. tr("zf_pda_waiting") .. DEF, "", "")
+        return
+    end
+    s.me = my_faction() or s.me
+    local f = self.faction or s.me
+    local ok, err = pcall(function()
+        self:Header(s, f)
+        if self.page == "summary" then self:Summary(s, f)
+        elseif self.page == "posts" then self:Posts(s, f)
+        elseif self.page == "diplomacy" then self:Diplomacy(s, f)
+        elseif self.page == "journal" then self:Journal(s, f)
+        elseif self.page == "traders" then self:Traders(s)
+        else self:People(s) end
+    end)
+    if not ok then C.warn("PDA tab: %s", err) end
+    if pos > 0 then self:List():SetScrollPos(pos) end
+end
+function zf_pda_tab:Update()
+    CUIScriptWnd.Update(self)
+end
+function on_game_start()
+    if not pda or pda.__zf_front then return end
+    pda.__zf_front = true
+    local orig = pda.set_active_subdialog
+    pda.set_active_subdialog = function(section)
+        if section == "eptZfFront" then return get_ui() end
+        return orig(section)
+    end
+end

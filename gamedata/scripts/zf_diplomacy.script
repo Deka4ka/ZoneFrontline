@@ -1,0 +1,180 @@
+local C = zf_core
+local function allowed()
+    return ui_options.get("alife/general/dynamic_relations") and true or false
+end
+local function pair_key(a, b)
+    if a > b then a, b = b, a end
+    return a .. "|" .. b
+end
+function apply(a, b, delta)
+    if not (allowed() and C.human(a) and C.human(b) and a ~= b) then return end
+    delta = delta * C.cfg("dip_scale", 1.0)
+    if warfare_relations and warfare_relations.enabled() then
+        warfare_relations.contribute_flat(a, b, delta)
+    else
+        local cur = game_relations.get_factions_community(a, b) or 0
+        local lim = 4500
+        game_relations.change_faction_relations(a, b, math.max(-lim - cur, math.min(lim - cur, delta)))
+    end
+    C.log("diplomacy: %s <-> %s %+d", a, b, delta)
+end
+function grievance(victim, aggressor, amount)
+    apply(victim, aggressor, -amount)
+end
+local function context()
+    local fs, owned = C.war_factions(), {}
+    for _, sm in ipairs(C.smarts()) do
+        local o = sm.owning_faction
+        if o then owned[o] = (owned[o] or 0) + 1 end
+    end
+    local strongest, most = nil, 0
+    for _, f in ipairs(fs) do
+        if (owned[f] or 0) > most then strongest, most = f, owned[f] end
+    end
+    return { factions = fs, owned = owned, strongest = strongest }
+end
+local function pair(ctx, ok)
+    local fs, cands = ctx.factions, {}
+    for i = 1, #fs do
+        for j = i + 1, #fs do
+            if ok(fs[i], fs[j]) then cands[#cands + 1] = { fs[i], fs[j] } end
+        end
+    end
+    if #cands == 0 then return end
+    local p = cands[math.random(#cands)]
+    if math.random() < 0.5 then return p[2], p[1] end
+    return p[1], p[2]
+end
+local function neutral(a, b)
+    return not C.enemies(a, b) and not C.friends(a, b)
+end
+local EVENTS = {
+    {
+        id = "truce", w = 3,
+        pick = function(ctx)
+            local losses = C.store("losses")
+            local need = C.cfg("truce_losses", 25)
+            for key, n in pairs(losses) do
+                local a, b = key:match("^(.-)|(.+)$")
+                if n >= need and C.enemies(a, b) then
+                    losses[key] = 0
+                    return 600, "zf_dip_truce", a, b
+                end
+            end
+        end,
+    },
+    {
+        id = "coalition", w = 3,
+        pick = function(ctx)
+            local s = ctx.strongest
+            if not s then return end
+            local a, b = pair(ctx, function(x, y)
+                return x ~= s and y ~= s and C.enemies(x, s) and C.enemies(y, s) and not C.enemies(x, y)
+            end)
+            if a then return 350, "zf_dip_coalition", a, b, s end
+        end,
+    },
+    {
+        id = "incident", w = 4,
+        pick = function(ctx)
+            local a, b = pair(ctx, neutral)
+            if a then return -300, "zf_dip_incident", a, b end
+        end,
+    },
+    {
+        id = "trade", w = 3,
+        pick = function(ctx)
+            local a, b = pair(ctx, function(x, y) return not C.enemies(x, y) end)
+            if a then return 200, "zf_dip_trade", a, b end
+        end,
+    },
+    {
+        id = "betrayal", w = 1,
+        pick = function(ctx)
+            local a, b = pair(ctx, function(x, y) return C.friends(x, y) end)
+            if a then return -900, "zf_dip_betrayal", a, b end
+        end,
+    },
+    {
+        id = "ultimatum", w = 2,
+        pick = function(ctx)
+            local s = ctx.strongest
+            if not s then return end
+            local weak = {}
+            for _, f in ipairs(ctx.factions) do
+                if f ~= s and neutral(s, f) and (ctx.owned[f] or 0) < (ctx.owned[s] or 0) then weak[#weak + 1] = f end
+            end
+            if #weak == 0 then return end
+            local w = weak[math.random(#weak)]
+            if math.random() < 0.5 then return 250, "zf_dip_ultimatum_yes", s, w end
+            return -450, "zf_dip_ultimatum_no", s, w
+        end,
+    },
+    {
+        id = "prisoners", w = 3,
+        pick = function(ctx)
+            local pow, best, most = C.store("pow"), nil, 0
+            for key, n in pairs(pow) do
+                if n > most then best, most = key, n end
+            end
+            if best then
+                local a, b = best:match("^(.-)|(.+)$")
+                pow[best] = nil
+                pow[b .. "|" .. a] = nil
+                return 150 + math.min(most, 10) * 60, "zf_dip_prisoners", a, b
+            end
+            local a, b = pair(ctx, C.enemies)
+            if a then return 200, "zf_dip_prisoners", a, b end
+        end,
+    },
+    {
+        id = "escalation", w = 3,
+        pick = function(ctx)
+            local a, b = pair(ctx, C.enemies)
+            if a then return -200, "zf_dip_escalation", a, b end
+        end,
+    },
+}
+local function draw(ctx)
+    local total = 0
+    for _, e in ipairs(EVENTS) do total = total + e.w end
+    for _ = 1, 6 do
+        local r = math.random() * total
+        for _, e in ipairs(EVENTS) do
+            r = r - e.w
+            if r <= 0 then
+                local delta, key, a, b, c = e.pick(ctx)
+                if delta then return delta, key, a, b, c end
+                break
+            end
+        end
+    end
+end
+local function run()
+    if not allowed() or not C.ready("dip") then return end
+    C.cooldown("dip", C.cfg("dip_interval_h", 12) * C.rand(0.7, 1.3))
+    if math.random() > C.cfg("dip_chance", 0.7) then return end
+    local delta, key, a, b, c = draw(context())
+    if not delta then return end
+    apply(a, b, delta)
+    C.report("dip", { a, b, c }, true, key, nil, "news", C.faction_name(a), C.faction_name(b), c and C.faction_name(c) or "")
+end
+local function community_of(se)
+    if not se then return end
+    if se.id == AC_ID then return warfare.actor_faction end
+    local g = se.group_id
+    local sq = g and g ~= 65535 and alife_object(g)
+    return sq and sq:clsid() == clsid.online_offline_group_s and sq:get_squad_community() or nil
+end
+local function on_npc_death(squad, npc, killer)
+    local a, b = squad and squad:get_squad_community(), community_of(killer)
+    if C.human(a) and C.human(b) and a ~= b then
+        local losses = C.store("losses")
+        local key = pair_key(a, b)
+        losses[key] = (losses[key] or 0) + 1
+    end
+end
+function on_game_start()
+    C.every("zf_diplomacy", 60, run)
+    RegisterScriptCallback("squad_on_npc_death", C.guard("zf_diplomacy.npc_death", on_npc_death))
+end

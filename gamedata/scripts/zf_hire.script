@@ -1,0 +1,201 @@
+local C = zf_core
+local BASE = { bounty = 2200, assault = 3000, fetch = 1200 }
+local MARKUP = { killer = 1.5, bandit = 1.25, renegade = 1.2, greh = 1.2, isg = 1.3, army = 1.1, ecolog = 1.1,
+    freedom = 1.05, stalker = 1.0, csky = 1.0, monolith = 1.0, dolg = 0.9 }
+local chosen = {}
+local deal = {}
+local mood = {}
+local tried = {}
+local function on()
+    return C.cfg("hire_enabled", true)
+end
+local function is_peer()
+    return XrrIsHost ~= nil and not XrrIsHost()
+end
+local function my_faction()
+    local ok, f = pcall(get_actor_true_community)
+    if ok and f then return f end
+    return C.community(db.actor)
+end
+local function side_of(npc)
+    return (character_community(npc) or ""):gsub("^actor_", "")
+end
+local function side_mult(npc)
+    local f, me = side_of(npc), my_faction()
+    if f == me then return 1 end
+    if C.cfg("hire_friends", true) and C.friends(f, me) and not C.enemies(f, me) then
+        return C.cfg("hire_friend_mult", 1.4)
+    end
+end
+local function cost_of(item)
+    local sec = item and item:section()
+    return sec and ini_sys:r_float_ex(sec, "cost") or 0
+end
+function price(npc, q)
+    local mult = side_mult(npc)
+    if not mult then return end
+    local gear = cost_of(npc:active_item() or npc:item_in_slot(3)) + cost_of(npc:item_in_slot(7))
+    local p = (BASE[q] or 1500) + C.rank_level(npc) * 450 + math.min(gear, 120000) / 30
+    p = p * (MARKUP[side_of(npc)] or 1) * mult * (0.8 + 0.5 * C.hash(npc:id(), 97))
+    local ok, rep = pcall(npc.character_reputation, npc)
+    rep = ok and tonumber(rep)
+    if rep then p = p * (1 - math.max(-0.2, math.min(0.15, rep / 10000))) end
+    p = p * (deal[npc:id()] or 1) * C.cfg("hire_price_mult", 1.0)
+    return math.max(500, math.floor(p / 50 + 0.5) * 50)
+end
+local function haggle_once(npc)
+    local id = npc:id()
+    tried[id] = time_global() + C.cfg("hire_haggle_min", 10) * 60000
+    local greed, roll = C.hash(id, 97), math.random()
+    if roll < 0.55 - greed * 0.35 then
+        deal[id], mood[id] = 0.8, "down"
+    elseif roll > 0.9 - greed * 0.15 then
+        deal[id], mood[id] = 1.15, "up"
+    else
+        mood[id] = "firm"
+    end
+end
+local function npc_of(a, b)
+    return dialogs.who_is_npc(a, b)
+end
+local function slot(i)
+    return zf_errands.doable_tasks()[i]
+end
+local function picked(npc)
+    return slot(chosen[npc:id()] or 1)
+end
+function dlg_offer(a, b)
+    if not (on() and slot(1)) then return false end
+    local npc = npc_of(a, b)
+    if not (npc and npc:alive()) or npc:has_info("npcx_is_companion") or get_object_story_id(npc:id()) then return false end
+    local sq = C.squad_of(npc:id())
+    if C.is_player(npc) or (sq and C.store("traders")[sq.id]) then return false end
+    return side_mult(npc) ~= nil
+end
+local function refusal(npc)
+    if is_peer() then return end
+    return zf_errands.hire_refusal(npc, "host")
+end
+function can_hire(a, b) return refusal(npc_of(a, b)) == nil end
+function busy(a, b) return refusal(npc_of(a, b)) ~= nil end
+function busy_text(a, b)
+    return C.text(refusal(npc_of(a, b)) or "zf_hire_busy", side_of(npc_of(a, b)))
+end
+local function slot_text(i, a, b)
+    local s = slot(i)
+    if not s then return "" end
+    local npc = npc_of(a, b)
+    local p = npc and price(npc, s.q)
+    local text = string.format(game.translate_string("zf_hire_slot"), s.title, p or 0)
+    if npc and not is_peer() then
+        local _, label = zf_errands.estimate(npc, s.id)
+        if label then text = text .. " " .. game.translate_string("zf_odds_" .. label) end
+    end
+    return text
+end
+function quote_text(a, b)
+    local npc = npc_of(a, b)
+    local s = npc and picked(npc)
+    return s and C.text("zf_hire_quote", side_of(npc), price(npc, s.q) or 0) or ""
+end
+function haggle_text(a, b)
+    local npc = npc_of(a, b)
+    local s = npc and picked(npc)
+    return s and C.text("zf_hire_haggle_" .. (mood[npc:id()] or "firm"), side_of(npc), price(npc, s.q) or 0) or ""
+end
+function can_pay(a, b)
+    local npc = npc_of(a, b)
+    local s = npc and picked(npc)
+    local p = s and price(npc, s.q)
+    return p ~= nil and db.actor:money() >= p
+end
+function cant_pay(a, b)
+    return not can_pay(a, b)
+end
+function can_haggle(a, b)
+    local npc = npc_of(a, b)
+    return npc ~= nil and (tried[npc:id()] or 0) <= time_global()
+end
+function haggle(a, b)
+    local npc = npc_of(a, b)
+    if npc then haggle_once(npc) end
+end
+function take(a, b)
+    local npc = npc_of(a, b)
+    local s = npc and picked(npc)
+    local p = s and price(npc, s.q)
+    if not (p and db.actor:money() >= p) then return end
+    db.actor:give_money(-p)
+    if is_peer() then
+        if not C.peer_order("__zf_hire|" .. s.id .. "|" .. p) then db.actor:give_money(p) end
+        return
+    end
+    local ok, why = zf_errands.send_hired(npc, s.id, "host", p)
+    if not ok then
+        C.info("hire, task %s, %s RU: %s", s.id, p, tostring(why))
+        db.actor:give_money(p)
+        C.local_news(why or "zf_hire_refused", side_of(npc), "news")
+    end
+end
+local function pick(i, a, b)
+    local npc = npc_of(a, b)
+    if npc then chosen[npc:id()] = i end
+end
+function has_1() return slot(1) ~= nil end
+function has_2() return slot(2) ~= nil end
+function has_3() return slot(3) ~= nil end
+function has_4() return slot(4) ~= nil end
+function has_5() return slot(5) ~= nil end
+function pick_1(a, b) pick(1, a, b) end
+function pick_2(a, b) pick(2, a, b) end
+function pick_3(a, b) pick(3, a, b) end
+function pick_4(a, b) pick(4, a, b) end
+function pick_5(a, b) pick(5, a, b) end
+function slot_text_1(a, b) return slot_text(1, a, b) end
+function slot_text_2(a, b) return slot_text(2, a, b) end
+function slot_text_3(a, b) return slot_text(3, a, b) end
+function slot_text_4(a, b) return slot_text(4, a, b) end
+function slot_text_5(a, b) return slot_text(5, a, b) end
+function dm_init(dialog)
+    local function add(parent, id, text, cond, act, script_text)
+        local ph = dialog:AddPhrase(text, tostring(id), tostring(parent), -10000)
+        if not ph then return end
+        local s = ph:GetPhraseScript()
+        if cond then s:AddPrecondition(cond) end
+        if act then s:AddAction(act) end
+        if script_text then s:SetScriptText(script_text) end
+    end
+    add("", 0, "zf_hire_ask")
+    add(0, 1, "zf_hire_listen", "zf_hire.can_hire")
+    add(0, 3, "zf_hire_busy", "zf_hire.busy", nil, "zf_hire.busy_text")
+    for i = 1, 5 do
+        add(1, 10 + i, "zf_hire_slot", "zf_hire.has_" .. i, "zf_hire.pick_" .. i, "zf_hire.slot_text_" .. i)
+        add(10 + i, 20 + i, "zf_hire_quote", nil, nil, "zf_hire.quote_text")
+        add(20 + i, 30 + i, "zf_hire_deal", "zf_hire.can_pay", "zf_hire.take")
+        add(30 + i, 40 + i, "zf_hire_deal_ok")
+        add(20 + i, 50 + i, "zf_hire_haggle", "zf_hire.can_haggle", "zf_hire.haggle")
+        add(50 + i, 60 + i, "zf_hire_quote", nil, nil, "zf_hire.haggle_text")
+        add(60 + i, 70 + i, "zf_hire_deal", "zf_hire.can_pay", "zf_hire.take")
+        add(70 + i, 80 + i, "zf_hire_deal_ok")
+        add(60 + i, 90 + i, "zf_hire_poor", "zf_hire.cant_pay")
+        add(60 + i, 100 + i, "zf_hire_no")
+        add(20 + i, 110 + i, "zf_hire_poor", "zf_hire.cant_pay")
+        add(20 + i, 120 + i, "zf_hire_no")
+    end
+    add(1, 9, "zf_hire_never")
+end
+local function peer_hire(rest, npc, owner)
+    local task, p = tostring(rest):match("^(.*)|(%d+)$")
+    p = tonumber(p)
+    if not (task and p) then return end
+    local ok, why = false, "zf_hire_refused"
+    if npc then ok, why = zf_errands.send_hired(npc, task, owner, p) end
+    C.info("hire for peer %s, task %s, %s RU: %s", tostring(owner), tostring(task), tostring(p), ok and "sent" or tostring(why))
+    if ok then return end
+    local player = C.player_by_key(owner)
+    if player then C.reward(player, p, "zf_news_refund", why) end
+    C.log("hire for peer %s refused: %s", tostring(owner), tostring(why))
+end
+function on_game_start()
+    C.on_peer_order("__zf_hire", peer_hire)
+end

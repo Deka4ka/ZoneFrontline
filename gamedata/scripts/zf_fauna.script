@@ -1,0 +1,469 @@
+local C = zf_core
+local E = zf_encounters
+local NIGHT_HUNTERS = { "bloodsucker", "snork", "zombie", "psysucker", "chimera", "lurker", "poltergeist" }
+local NO_ALPHA = { "tushkano", "zombie", "rat", "poltergeist", "controller", "contr_" }
+local NO_FLEE = { "zombie", "controller", "contr_", "poltergeist", "gigant", "burer" }
+local PSI = { "controller", "contr_" }
+local EVOLVE = {
+    { "psy_dog", "simulation_psy_dog_squad" }, { "pseudodog", "simulation_psy_dog_squad" },
+    { "dog", "simulation_pseudodog" }, { "tushkano", "simulation_cat" }, { "cat", "simulation_lurker" },
+    { "boar", "simulation_boar_3_5" }, { "flesh", "simulation_boar" }, { "snork", "simulation_bloodsucker" },
+    { "bloodsucker_black", "simulation_psysucker" }, { "bloodsucker", "simulation_bloodsucker_black" },
+    { "zombie", "simulation_contr_4zomb_norm" }, { "lurker", "simulation_chimera" },
+}
+local ZOMBIES = { "simulation_zombie_3_6", "zombied_sim_squad_novice" }
+local SCAVENGERS = { "simulation_dog", "simulation_mix_dogs", "simulation_flesh", "simulation_tushkano_7_10", "simulation_cat" }
+local alpha = {}
+local check = {}
+local panic = {}
+local peak = {}
+local said = {}
+local function has(sec, list)
+    for _, k in ipairs(list) do
+        if sec:find(k, 1, true) then return true end
+    end
+    return false
+end
+local function existing(list)
+    local out = {}
+    for _, s in ipairs(list) do
+        if ini_sys:section_exist(s) then out[#out + 1] = s end
+    end
+    return out
+end
+local function lairs()
+    return C.store("lairs")
+end
+local function eaters()
+    return C.store("maneaters")
+end
+local function man_eater(id)
+    local need = C.cfg("maneater_kills", 2)
+    return need > 0 and (eaters()[id] or 0) >= need
+end
+local function on()
+    return C.cfg("fauna_enabled", true)
+end
+local function once(key, seconds)
+    local t = time_global()
+    if (said[key] or 0) > t then return false end
+    said[key] = t + seconds * 1000
+    return true
+end
+local function lair_points()
+    local out = {}
+    for _, sm in ipairs(C.smarts()) do
+        local p = sm.props
+        if (p.lair or 0) > 0 and (p.base or 0) < 1 then out[#out + 1] = sm end
+    end
+    return out
+end
+local function packs_by_point()
+    local at = {}
+    for id in pairs(warfare.registered_squads.monster or {}) do
+        local sq = C.live_squad(id)
+        local t = sq and sq.current_target_id
+        if t then
+            at[t] = at[t] or {}
+            table.insert(at[t], sq)
+        end
+    end
+    return at
+end
+local function all_gone(ids)
+    for _, s in ipairs(ids) do
+        local sq = C.live_squad(s.id)
+        if sq and sq:section_name() == s.sec then return false end
+    end
+    return true
+end
+local function pay_hunters(sm, e)
+    local hits = C.store("lair_hits")[sm.id] or {}
+    C.store("lair_hits")[sm.id] = nil
+    local amount = e.bounty and e.bounty.pay or C.cfg("lair_reward", 400) * e.lvl
+    local paid, t = 0, C.now()
+    for key, when in pairs(hits) do
+        local p = t - when < 2 * C.HOUR and C.player_by_key(key)
+        if p then
+            C.reward(p, amount, "zf_news_bounty_paid")
+            paid = paid + 1
+        end
+    end
+    return paid
+end
+local function cleared(sm, e)
+    local paid = pay_hunters(sm, e)
+    local f = e.bounty and e.bounty.f or nil
+    if paid > 0 then
+        C.report("fauna", f, true, "zf_fauna_cleared", f, "news", C.smart_name(sm))
+    else
+        C.report("fauna", f, e.bounty ~= nil, "zf_fauna_cleared_npc", f, "news", C.smart_name(sm))
+    end
+    C.log("nest at %s cleared (level %d, %d players paid)", sm:name(), e.lvl, paid)
+    lairs()[sm.id] = nil
+end
+local function survey()
+    local L, t, at = lairs(), C.now(), packs_by_point()
+    local grow, decay = C.cfg("lair_growth_h", 18) * C.HOUR, C.cfg("lair_decay_h", 12) * C.HOUR
+    for _, sm in ipairs(lair_points()) do
+        local e, here = L[sm.id], at[sm.id]
+        if here then
+            if not e then
+                e = { lvl = 0, t = t }
+                L[sm.id] = e
+            end
+            e.sec, e.empty = here[1]:section_name(), nil
+            e.seen = {}
+            for _, sq in ipairs(here) do e.seen[#e.seen + 1] = { id = sq.id, sec = sq:section_name() } end
+            if t - e.t >= grow then e.lvl, e.t = math.min(5, e.lvl + 1), t end
+        elseif e then
+            if e.seen and e.lvl >= 1 and all_gone(e.seen) then
+                cleared(sm, e)
+            else
+                e.seen = nil
+                e.empty = e.empty or t
+                if t - e.empty >= decay then
+                    e.lvl, e.empty = e.lvl - 1, t
+                    if e.lvl <= 0 then L[sm.id] = nil end
+                end
+            end
+        end
+    end
+end
+local function human_points(sm, radius, bases)
+    return C.neighbours(sm, radius, function(o)
+        return C.human(o.owning_faction) and (bases or not C.is_base(o))
+    end)
+end
+local function raid(sm, e, here)
+    local target = human_points(sm, 700, e.lvl >= 4)[1]
+    local sq = target and here[math.random(#here)]
+    if not (sq and C.send(sq, target.id, 4)) then return end
+    e.raid_t = C.now() + 6 * C.HOUR
+    local o = target.owning_faction
+    C.log("nest at %s raids %s (%s)", sm:name(), target:name(), o)
+    C.report("fauna", o, o == warfare.actor_faction, "zf_fauna_raid", o, "danger", C.smart_name(target))
+end
+local function fauna_spawned()
+    local n, list = 0, C.store("fauna_sq")
+    for id, sec in pairs(list) do
+        local sq = C.live_squad(id)
+        if sq and sq:section_name() == sec then n = n + 1 else list[id] = nil end
+    end
+    return n
+end
+local function spawn_pack(sec, at, to, hours)
+    if fauna_spawned() >= C.cfg("lair_spawn_max", 8) or not ini_sys:section_exist(sec) then return end
+    local _, d = C.nearest_player(at.position, C.smart_level(at))
+    if d and d < 400 and C.crowded() then return end
+    local ok, sq = pcall(warfare.spawn_squad, sec, at)
+    if not (ok and sq) then return end
+    C.store("fauna_sq")[sq.id] = sq:section_name()
+    C.send(sq, to.id, hours or 12)
+    return sq
+end
+local function evolve(sec)
+    for _, pair in ipairs(EVOLVE) do
+        if sec:find(pair[1], 1, true) and ini_sys:section_exist(pair[2]) then return pair[2] end
+    end
+    return sec
+end
+local function breed(sm, e)
+    e.breed_t = C.now() + 24 * C.HOUR
+    local sec = evolve(e.sec)
+    if spawn_pack(sec, sm, sm, 12) then
+        e.sec = sec
+        C.log("nest at %s breeds %s", sm:name(), sec)
+    end
+end
+local function spread(sm, e, here, at)
+    e.spread_t = C.now() + 48 * C.HOUR
+    local L = lairs()
+    local best, bd
+    local p = C.smart_gpos(sm)
+    for _, o in ipairs(lair_points()) do
+        local q = o.id ~= sm.id and not at[o.id] and not L[o.id] and C.smart_gpos(o)
+        local d = q and p and C.d2(p, q)
+        if d and d <= 900 * 900 and (not bd or d < bd) then best, bd = o, d end
+    end
+    local sq = best and here[math.random(#here)]
+    if not (sq and C.send(sq, best.id, 24)) then return end
+    L[best.id] = { lvl = 1, t = C.now(), sec = e.sec }
+    C.log("nest at %s spreads to %s", sm:name(), best:name())
+    C.report("fauna", nil, C.relevant(best), "zf_fauna_spread", nil, "news", C.smart_name(best))
+end
+local function psi_wave(sm, e)
+    e.psi_t = C.now() + 36 * C.HOUR
+    local base = human_points(sm, 1200, true)
+    local target
+    for _, o in ipairs(base) do
+        if C.is_base(o) then target = o break end
+    end
+    local pool = existing(ZOMBIES)
+    if not (target and #pool > 0) then return end
+    local n = 0
+    for _ = 1, math.random(1, 2) do
+        if spawn_pack(pool[math.random(#pool)], sm, target, 8) then n = n + 1 end
+    end
+    if n == 0 then return end
+    local o = target.owning_faction
+    C.log("psi wave from %s at %s", sm:name(), target:name())
+    C.report("fauna", o, o == warfare.actor_faction or C.relevant(target, o), "zf_fauna_psi", nil,
+        o == warfare.actor_faction and "danger" or "news", C.smart_name(target))
+end
+local function post_bounty(sm, e)
+    local base
+    for _, o in ipairs(human_points(sm, 1500, true)) do
+        if C.is_base(o) then base = o break end
+    end
+    if not base then
+        e.bounty = false
+        return
+    end
+    local f = base.owning_faction
+    e.bounty = { f = f, pay = C.cfg("lair_bounty_base", 1500) + e.lvl * C.cfg("lair_bounty_step", 1000),
+        until_t = C.now() + 72 * C.HOUR }
+    C.report("fauna", f, f == warfare.actor_faction or C.relevant(sm, f), "zf_fauna_bounty", f, "news",
+        C.faction_name(f), e.bounty.pay, C.smart_name(sm))
+end
+local function nests()
+    if not on() then return end
+    for id in pairs(eaters()) do
+        if not alife_object(id) then eaters()[id] = nil end
+    end
+    survey()
+    local L, t, at = lairs(), C.now(), packs_by_point()
+    local night = warfare_utils.is_night()
+    for id, e in pairs(L) do
+        local sm, here = alife_object(id), at[id]
+        if e.bounty and e.bounty.until_t < t then e.bounty = nil end
+        if sm and here and e.lvl >= 2 then
+            local nh = has(e.sec or "", NIGHT_HUNTERS)
+            local k = nh and (night and 2 or 0.5) or 1
+            if (e.raid_t or 0) <= t and math.random() < C.cfg("lair_raid_chance", 0.15) * k * e.lvl / 3 then
+                raid(sm, e, here)
+            end
+            if e.lvl >= 3 and (e.breed_t or 0) <= t then breed(sm, e) end
+            if e.lvl >= 3 and has(e.sec or "", PSI) and (e.psi_t or 0) <= t then psi_wave(sm, e) end
+            if e.lvl >= 4 and e.bounty == nil then post_bounty(sm, e) end
+            if e.lvl >= 5 and (e.spread_t or 0) <= t then spread(sm, e, here, at) end
+        end
+    end
+end
+function hunting_grounds(gp, radius)
+    local L, at, list, r2 = lairs(), packs_by_point(), {}, radius * radius
+    for _, sm in ipairs(lair_points()) do
+        local here = at[sm.id]
+        local p = here and C.smart_gpos(sm)
+        local d = p and C.d2(p, gp)
+        if d and d <= r2 then
+            local e = L[sm.id]
+            list[#list + 1] = { sm = sm, lvl = e and e.lvl or 0, sec = here[1]:section_name(), d = d }
+        end
+    end
+    table.sort(list, function(a, b) return a.d < b.d end)
+    return list
+end
+function hunted(lair_id, by_player_key)
+    local L = lairs()
+    local e = L[lair_id]
+    for _, sq in ipairs(packs_by_point()[lair_id] or {}) do
+        if not sq.online then
+            for m in sq:squad_members() do
+                if math.random() < 0.4 and sq:npc_count() > 1 then sq:remove_npc(m.id, true) break end
+            end
+        end
+    end
+    if not e then return false end
+    e.lvl = e.lvl - 2
+    if e.lvl > 0 then return false end
+    local sm = alife_object(lair_id)
+    if by_player_key and sm then
+        local hits = C.store("lair_hits")
+        hits[lair_id] = hits[lair_id] or {}
+        hits[lair_id][by_player_key] = C.now()
+        pay_hunters(sm, e)
+    end
+    L[lair_id] = nil
+    return true
+end
+local function flee(sq)
+    local t = time_global() + C.cfg("pack_panic_s", 40) * 1000
+    for _, m in ipairs(C.members_online(sq)) do
+        m:set_custom_panic_threshold(1.0)
+        panic[m:id()] = t
+    end
+    local home = sq.current_target_id and lairs()[sq.current_target_id] and sq.current_target_id
+    if not home then
+        local here = alife_object(sq.current_target_id or -1)
+        local pts = here and C.neighbours(here, 800, function(o) return (o.props.lair or 0) > 0 end) or {}
+        home = pts[#pts] and pts[#pts].id
+    end
+    if home then C.send(sq, home, 2) end
+    C.log("pack %s panics", sq.id)
+end
+local function calm_down()
+    local t = time_global()
+    for id, until_t in pairs(panic) do
+        if t >= until_t then
+            panic[id] = nil
+            local m = level.object_by_id(id)
+            if m and m:alive() then m:set_default_panic_threshold() end
+        end
+    end
+    for id, due in pairs(check) do
+        if t >= due then
+            check[id] = nil
+            local m = level.object_by_id(id)
+            local sq = m and m:alive() and C.squad_of(id)
+            if sq and man_eater(id) and not has(sq:section_name(), NO_ALPHA) then
+                alpha[id] = sq.id
+            elseif sq and sq:commander_id() == id and sq:npc_count() >= 2 and not has(sq:section_name(), NO_ALPHA) then
+                local nest = lairs()[sq.current_target_id or -1]
+                if (nest and nest.lvl >= 2) or C.hash(sq.id, 71) < C.cfg("alpha_chance", 0.25) then
+                    alpha[id] = sq.id
+                end
+            end
+        end
+    end
+end
+local function on_spawn(obj)
+    if obj then check[obj:id()] = time_global() + 2000 end
+end
+local function on_destroy(obj)
+    local id = obj and obj:id()
+    if id then alpha[id], check[id], panic[id] = nil, nil, nil end
+end
+local function on_before_hit(monster, shit)
+    if alpha[monster:id()] and on() then shit.power = shit.power * C.cfg("alpha_armor", 0.6) end
+end
+local function on_monster_death(victim, who)
+    local id = victim and victim:id()
+    if id then eaters()[id] = nil end
+    local sid = id and alpha[id]
+    if not sid then return end
+    alpha[id] = nil
+    local sq = C.live_squad(sid)
+    if sq then flee(sq) end
+    if who and C.is_player(who) and once("alpha", 120) then C.report("fauna", nil, true, "zf_fauna_alpha_down", nil, "news") end
+end
+local function fed(killer)
+    local ksq = killer and C.squad_of(killer.id)
+    if not (ksq and ksq:get_squad_community() == "monster") or has(ksq:section_name(), NO_ALPHA) then return end
+    local n = (eaters()[killer.id] or 0) + 1
+    eaters()[killer.id] = n
+    if alpha[killer.id] or not man_eater(killer.id) or not level.object_by_id(killer.id) then return end
+    alpha[killer.id] = ksq.id
+    C.log("man-eater %s (%s) leads its pack", killer.id, ksq:section_name())
+    local m = level.object_by_id(killer.id)
+    local _, d = C.nearest_player(m:position(), C.player_level(m))
+    local home = alife_object(ksq.current_target_id or -1)
+    if home and home:clsid() == clsid.smart_terrain then
+        C.report("fauna", nil, d and d < 400 and once("maneater", 600), "zf_fauna_maneater", nil, "danger", C.smart_name(home))
+    end
+end
+local function on_npc_death(sq, se_npc, killer)
+    if not on() or not sq then return end
+    if sq:get_squad_community() ~= "monster" then return fed(killer) end
+    local at = sq.current_target_id
+    local p = at and lairs()[at] and killer and C.is_player_id(killer.id) and level.object_by_id(killer.id)
+    if p then
+        local hits = C.store("lair_hits")
+        hits[at] = hits[at] or {}
+        hits[at][C.player_key(p)] = C.now()
+    end
+    local n = sq:npc_count()
+    peak[sq.id] = math.max(peak[sq.id] or n, n)
+    if sq.online and n - 1 >= 1 and (n - 1) / peak[sq.id] <= C.cfg("pack_break", 0.4)
+        and not has(sq:section_name(), NO_FLEE) and not panic[sq:commander_id()] then
+        flee(sq)
+    end
+end
+local function on_surge()
+    if not C.store("fauna_cd").migrate then C.store("fauna_cd").migrate = C.now() + 3 * C.HOUR end
+end
+local function migrate()
+    if not on() then return end
+    local cd = C.store("fauna_cd")
+    if not cd.migrate or C.now() < cd.migrate then return end
+    cd.migrate = nil
+    local squads = {}
+    for id in pairs(warfare.registered_squads.monster or {}) do
+        local sq = C.live_squad(id)
+        if sq and not sq.online then squads[#squads + 1] = sq end
+    end
+    local points, moved, first = lair_points(), 0, nil
+    for _ = 1, math.min(C.cfg("migration_squads", 3), #squads) do
+        local sq = table.remove(squads, math.random(#squads))
+        local p = C.gpos(sq)
+        local cands = {}
+        for _, o in ipairs(points) do
+            local q = p and C.smart_gpos(o)
+            local d = q and C.d2(p, q)
+            if d and d >= 800 * 800 and d <= 3000 * 3000 then cands[#cands + 1] = o end
+        end
+        local to = cands[1] and cands[math.random(#cands)]
+        if to and C.send(sq, to.id, 24) then
+            moved = moved + 1
+            first = first or to
+        end
+    end
+    if moved > 0 then
+        C.log("migration: %d packs on the move", moved)
+        C.report("fauna", nil, true, "zf_fauna_migration", nil, "news", C.smart_name(first))
+    end
+end
+local function scavenge()
+    if not on() then return end
+    local done, t = C.store("scavenged"), C.now()
+    for id, when in pairs(done) do
+        if t - when > 12 * C.HOUR then done[id] = nil end
+    end
+    for id, when in pairs(C.store("battles")) do
+        local sm = not done[id] and alife_object(id)
+        local age = t - when
+        if sm and age >= 20 * 60 and age <= 3 * C.HOUR then
+            local _, d = C.nearest_player(sm.position, C.smart_level(sm))
+            if d and d < 400 then
+                done[id] = t
+                if math.random() < C.cfg("scavenge_chance", 0.5) then
+                    local gp, best, bd = C.smart_gpos(sm), nil, nil
+                    for sid in pairs(warfare.registered_squads.monster or {}) do
+                        local sq = C.live_squad(sid)
+                        local p = sq and has(sq:section_name(), { "dog", "flesh", "boar", "cat", "tushkano" }) and C.gpos(sq)
+                        local dd = p and gp and C.d2(p, gp)
+                        if dd and dd < 600 * 600 and (not bd or dd < bd) then best, bd = sq, dd end
+                    end
+                    if best then
+                        C.send(best, id, 3)
+                    elseif not C.crowded() then
+                        local from = {}
+                        for _, o in ipairs(C.smarts_on_level(C.smart_level(sm))) do
+                            local dist = o.position:distance_to(sm.position)
+                            if dist >= 150 and dist <= 350 then from[#from + 1] = o end
+                        end
+                        local pool = existing(SCAVENGERS)
+                        if #from > 0 and #pool > 0 then
+                            local out = {}
+                            E.squad(out, pool[math.random(#pool)], from[math.random(#from)], sm)
+                            E.track("scavengers_m", out, 4)
+                        end
+                    end
+                    C.log("scavengers drawn to the battlefield at %s", sm:name())
+                end
+            end
+        end
+    end
+end
+function on_game_start()
+    RegisterScriptCallback("monster_on_net_spawn", on_spawn)
+    RegisterScriptCallback("monster_on_net_destroy", on_destroy)
+    RegisterScriptCallback("monster_on_before_hit", on_before_hit)
+    RegisterScriptCallback("monster_on_death_callback", C.guard("zf_fauna.alpha", on_monster_death, true))
+    RegisterScriptCallback("squad_on_npc_death", C.guard("zf_fauna.death", on_npc_death, true))
+    RegisterScriptCallback("on_before_surge", on_surge)
+    C.every("zf_fauna", 60, nests)
+    C.every("zf_fauna_packs", 2, calm_down, true)
+    C.every("zf_fauna_migration", 120, migrate)
+    C.every("zf_fauna_scavengers", 60, scavenge)
+end

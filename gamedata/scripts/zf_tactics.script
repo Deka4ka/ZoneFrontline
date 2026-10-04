@@ -1,0 +1,342 @@
+local C = zf_core
+local MIN = 60
+local DOCTRINE = {
+    army     = { frontal = 2, pincer = 4, cauldron = 4, siege = 3, feint = 1, recon = 2, infiltration = 1 },
+    dolg     = { frontal = 3, pincer = 3, cauldron = 2, siege = 3, recon = 2 },
+    freedom  = { frontal = 2, feint = 4, infiltration = 4, pincer = 2, recon = 2 },
+    stalker  = { frontal = 3, feint = 2, recon = 3, pincer = 1 },
+    csky     = { frontal = 2, pincer = 3, infiltration = 3, recon = 2 },
+    ecolog   = { frontal = 1, recon = 2 },
+    bandit   = { meat = 5, feint = 3, frontal = 2, infiltration = 2 },
+    renegade = { meat = 5, feint = 2, frontal = 2, infiltration = 2 },
+    monolith = { meat = 5, siege = 2, frontal = 3, pincer = 1 },
+    greh     = { meat = 4, infiltration = 3, frontal = 2 },
+    killer   = { pincer = 3, feint = 3, infiltration = 4, recon = 2, cauldron = 1 },
+    isg      = { infiltration = 4, pincer = 3, cauldron = 2, recon = 2 },
+}
+local function ops()
+    return C.store("ops")
+end
+function encircled(smart_id, f)
+    local e = smart_id and C.store("encircled")[smart_id]
+    return e ~= nil and e.def == f and e.until_t > C.now()
+end
+local function live(ids)
+    local out = {}
+    for _, id in ipairs(ids or {}) do
+        local sq = alife_object(id)
+        if sq and sq:clsid() == clsid.online_offline_group_s and sq:npc_count() > 0 then out[#out + 1] = sq end
+    end
+    return out
+end
+local function ids(list)
+    local out = {}
+    for i, sq in ipairs(list) do out[i] = sq.id end
+    return out
+end
+local function send_ids(list, target_id, hours)
+    local n = 0
+    for _, sq in ipairs(live(list)) do
+        if C.send(sq, target_id, hours or 12) then n = n + 1 end
+    end
+    return n
+end
+local function hold(list, hours)
+    for _, id in ipairs(list) do C.store("busy")[id] = C.now() + hours * C.HOUR end
+end
+local function take(pool, n)
+    local out = {}
+    while #out < n and #pool > 0 do out[#out + 1] = table.remove(pool, 1).id end
+    return out
+end
+local function flank_pair(target)
+    local tp = C.smart_gpos(target)
+    local around = C.neighbours(target, C.cfg("flank_radius", 500))
+    local best, sep
+    for i = 1, #around do
+        for j = i + 1, #around do
+            local a, b = C.smart_gpos(around[i]), C.smart_gpos(around[j])
+            if a and b then
+                local d = math.abs(math.atan2(a.z - tp.z, a.x - tp.x) - math.atan2(b.z - tp.z, b.x - tp.x))
+                d = math.min(d, 2 * math.pi - d)
+                if d >= math.pi / 2 and (not sep or d > sep) then best, sep = { around[i], around[j] }, d end
+            end
+        end
+    end
+    return best
+end
+local function relief_spot(target, def)
+    local tp = C.smart_gpos(target)
+    local base = tp and C.nearest_own_base(def, tp, target)
+    local bp = base and C.smart_gpos(base)
+    if not bp then return end
+    local mid = vector():set((tp.x + bp.x) / 2, 0, (tp.z + bp.z) / 2)
+    local best, bd
+    for _, sm in ipairs(C.smarts()) do
+        local p = sm.id ~= target.id and sm.id ~= base.id and C.smart_gpos(sm)
+        local d = p and C.d2(p, mid)
+        if d and (not bd or d < bd) then best, bd = sm, d end
+    end
+    return best
+end
+local function maybe_relief_ambush(op, pool, target)
+    if #pool == 0 or math.random() > C.cfg("relief_ambush_chance", 0.5) then return end
+    local spot = relief_spot(target, op.def)
+    if spot then
+        local amb = take(pool, 1)
+        send_ids(amb, spot.id, 8)
+        C.log("tactic %s: %s ambush on the relief route at %s", op.tactic, op.f, spot:name())
+    end
+end
+local function announce(op, target, key_suffix, silent_attacker)
+    local def = op.def
+    if def == warfare.actor_faction then
+        C.report("war", { op.f, def }, true, "zf_tac_" .. key_suffix .. "_def", def, "danger", C.smart_name(target),
+            C.faction_name(op.f))
+    else
+        C.report("war", { op.f, def }, not silent_attacker and C.relevant(target, op.f, def), "zf_tac_" .. key_suffix,
+            op.f, "news", C.smart_name(target), C.faction_name(def))
+    end
+end
+local T = {}
+T.frontal = {
+    start = function(op, pool, target)
+        local n = math.random(C.cfg("assault_squads_min", 3), math.max(C.cfg("assault_squads_min", 3), C.cfg("assault_squads_max", 5)))
+        op.a = take(pool, n)
+        if #op.a < C.cfg("assault_squads_min", 3) then return false end
+        send_ids(op.a, target.id)
+        maybe_relief_ambush(op, pool, target)
+        if zf_artillery.capable(op.f) and math.random() < C.cfg("assault_art_chance", 0.6) then
+            zf_artillery.strike(target, op.f)
+        end
+        announce(op, target, "frontal")
+        return true
+    end,
+    step = function() return true end,
+}
+T.meat = {
+    start = function(op, pool, target)
+        table.sort(pool, function(a, b)
+            local na, nb = a:section_name():find("novice") and 0 or 1, b:section_name():find("novice") and 0 or 1
+            return na < nb
+        end)
+        local all = take(pool, C.cfg("meat_squads", 6))
+        if #all < 4 then return false end
+        op.waves = {}
+        for i, id in ipairs(all) do
+            local w = math.floor((i - 1) / 2) + 1
+            op.waves[w] = op.waves[w] or {}
+            table.insert(op.waves[w], id)
+            C.store("fanatic")[id] = C.now() + 12 * C.HOUR
+        end
+        op.wave = 1
+        send_ids(op.waves[1], target.id)
+        for w = 2, #op.waves do hold(op.waves[w], 3) end
+        op.at = C.now() + C.cfg("meat_wave_min", 20) * MIN
+        announce(op, target, "meat")
+        return true
+    end,
+    step = function(op, target)
+        op.wave = op.wave + 1
+        local w = op.waves[op.wave]
+        if not w then return true end
+        send_ids(w, target.id)
+        op.at = C.now() + C.cfg("meat_wave_min", 20) * MIN
+        return op.wave >= #op.waves
+    end,
+}
+T.pincer = {
+    start = function(op, pool, target)
+        local flanks = flank_pair(target)
+        if not flanks or #pool < 4 then return false end
+        op.a, op.b = take(pool, 2), take(pool, 2)
+        send_ids(op.a, flanks[1].id, 6)
+        send_ids(op.b, flanks[2].id, 6)
+        maybe_relief_ambush(op, pool, target)
+        op.at = C.now() + C.cfg("pincer_flank_min", 40) * MIN
+        announce(op, target, "pincer")
+        return true
+    end,
+    step = function(op, target)
+        send_ids(op.a, target.id)
+        send_ids(op.b, target.id)
+        return true
+    end,
+}
+T.cauldron = {
+    start = function(op, pool, target)
+        local cut = C.neighbours(target, C.cfg("cauldron_radius", 600), function(sm)
+            return sm.owning_faction ~= op.f and not C.is_base(sm)
+        end)
+        if #cut == 0 or #pool < 4 then return false end
+        op.cut, op.a = {}, {}
+        for i = 1, math.min(2, #cut) do
+            local grp = take(pool, 1)
+            send_ids(grp, cut[i].id, 6)
+            op.cut[i] = cut[i].id
+            op.a[#op.a + 1] = grp[1]
+        end
+        op.b = take(pool, math.max(2, C.cfg("assault_squads_min", 3) - 1))
+        hold(op.b, 3)
+        maybe_relief_ambush(op, pool, target)
+        op.at = C.now() + C.cfg("cauldron_cut_min", 90) * MIN
+        announce(op, target, "cauldron")
+        return true
+    end,
+    step = function(op, target)
+        local held = 0
+        for _, id in ipairs(op.cut) do
+            local sm = alife_object(id)
+            if sm and sm.owning_faction == op.f then held = held + 1 end
+        end
+        if held >= math.min(#op.cut, C.cfg("cauldron_need", 1)) then
+            C.store("encircled")[target.id] = { def = op.def, until_t = C.now() + C.cfg("cauldron_hold_h", 6) * C.HOUR }
+            C.log("cauldron closed: %s encircles %s (%s)", op.f, target:name(), op.def)
+            C.report("war", { op.f, op.def }, C.relevant(target, op.f, op.def), "zf_tac_cauldron_closed", nil,
+                op.def == warfare.actor_faction and "danger" or "news", C.smart_name(target), C.faction_name(op.def))
+            send_ids(op.b, target.id)
+            send_ids(op.a, target.id)
+        else
+            C.report("war", { op.f, op.def }, C.relevant(target, op.f, op.def), "zf_tac_cauldron_failed", nil, "news",
+                C.smart_name(target))
+        end
+        return true
+    end,
+}
+T.siege = {
+    start = function(op, pool, target)
+        if not zf_artillery.capable(op.f) or #pool < 2 then return false end
+        op.a = {}
+        for i, sm in ipairs(C.neighbours(target, C.cfg("cauldron_radius", 600))) do
+            if i > 2 then break end
+            local grp = take(pool, 1)
+            send_ids(grp, sm.id, 12)
+            op.a[#op.a + 1] = grp[1]
+        end
+        if #op.a == 0 then return false end
+        op.strikes = 1
+        zf_artillery.strike(target, op.f)
+        op.at = C.now() + C.rand(60, 120) * MIN
+        announce(op, target, "siege")
+        return true
+    end,
+    step = function(op, target)
+        if op.strikes < C.cfg("siege_strikes", 3) then
+            op.strikes = op.strikes + 1
+            zf_artillery.strike(target, op.f)
+            op.at = C.now() + C.rand(60, 120) * MIN
+            return false
+        end
+        if (target.defense_count or 0) <= 1 or target.owning_faction ~= op.def then
+            send_ids(op.a, target.id)
+            local gp = C.smart_gpos(target)
+            for _, sq in ipairs(gp and C.nearest_free(op.f, gp, C.cfg("assault_radius", 1500), 2) or {}) do
+                C.send(sq, target.id, 12)
+            end
+            C.log("siege: %s storms %s", op.f, target:name())
+        end
+        return true
+    end,
+}
+T.feint = {
+    start = function(op, pool, target)
+        local decoys = C.neighbours(target, C.cfg("feint_radius", 800), function(sm)
+            return C.human(sm.owning_faction) and C.enemies(op.f, sm.owning_faction)
+        end)
+        if #decoys == 0 or #pool < 3 then return false end
+        local decoy = decoys[math.random(#decoys)]
+        send_ids(take(pool, 1), decoy.id, 6)
+        op.a = take(pool, math.max(2, C.cfg("assault_squads_min", 3) - 1))
+        hold(op.a, 3)
+        op.at = C.now() + C.cfg("feint_delay_min", 20) * MIN
+        C.report("war", { op.f, decoy.owning_faction }, C.relevant(decoy, op.f, decoy.owning_faction), "zf_tac_feint",
+            op.f, "news", C.smart_name(decoy))
+        return true
+    end,
+    step = function(op, target)
+        send_ids(op.a, target.id)
+        return true
+    end,
+}
+T.infiltration = {
+    start = function(op, pool, target)
+        if not warfare_utils.is_night() or #pool < 2 then return false end
+        op.a = take(pool, math.min(4, #pool))
+        send_ids({ op.a[1] }, target.id, 8)
+        hold(op.a, 3)
+        op.next = 2
+        op.at = C.now() + C.cfg("infiltration_gap_min", 10) * MIN
+        if op.def == warfare.actor_faction then announce(op, target, "infiltration", true) end
+        return true
+    end,
+    step = function(op, target)
+        local id = op.a[op.next]
+        if not id then return true end
+        send_ids({ id }, target.id, 8)
+        op.next = op.next + 1
+        op.at = C.now() + C.cfg("infiltration_gap_min", 10) * MIN
+        return op.next > #op.a
+    end,
+}
+T.recon = {
+    start = function(op, pool, target)
+        op.a = take(pool, 1)
+        if #op.a == 0 then return false end
+        C.store("recon")[op.a[1]] = C.now() + 6 * C.HOUR
+        send_ids(op.a, target.id, 6)
+        op.at = C.now() + 2 * C.HOUR
+        return true
+    end,
+    step = function(op, target)
+        C.store("scouted")[op.f .. "|" .. target.id] = C.now() + 24 * C.HOUR
+        C.log("recon: %s scouted %s", op.f, target:name())
+        C.note("war", { op.f, target.owning_faction }, C.text("zf_j_recon", op.f, C.faction_name(op.f), C.smart_name(target)))
+        return true
+    end,
+}
+function launch(f, target, pool)
+    local weights = {}
+    for k, w in pairs(DOCTRINE[f] or { frontal = 1 }) do weights[k] = w end
+    local op = { f = f, target = target.id, def = target.owning_faction }
+    local tactic
+    for _ = 1, 4 do
+        tactic = C.weighted(weights)
+        if not tactic then break end
+        local copy = {}
+        for i, sq in ipairs(pool) do copy[i] = sq end
+        op.tactic = tactic
+        if T[tactic].start(op, copy, target) then
+            pool = copy
+            break
+        end
+        weights[tactic] = nil
+        tactic = nil
+    end
+    if not tactic then
+        op.tactic = "frontal"
+        if not T.frontal.start(op, pool, target) then return end
+        tactic = "frontal"
+    end
+    if op.at then ops()[f .. "_" .. target.id .. "_" .. C.now()] = op end
+    C.log("tactic %s: %s -> %s (%s)", tactic, f, target:name(), op.def)
+    C.store("front")[f .. "_" .. target.id] = { f = f, def = op.def, target = target.id, tactic = tactic, t = C.now() }
+    if C.human(op.def) then
+        C.store("grudge")[op.def] = { vs = f, until_t = C.now() + C.cfg("grudge_h", 48) * C.HOUR }
+        zf_diplomacy.grievance(op.def, f, C.cfg("assault_grievance", 150))
+    end
+    return tactic
+end
+local function run()
+    local t = C.now()
+    for key, op in pairs(ops()) do
+        if t >= op.at then
+            local target = alife_object(op.target)
+            local ok, done = pcall(function() return not target or T[op.tactic].step(op, target) end)
+            if not ok then C.warn("tactic %s: %s", op.tactic, done) end
+            if not ok or done then ops()[key] = nil end
+        end
+    end
+end
+function on_game_start()
+    C.every("zf_tactics", 20, run)
+end

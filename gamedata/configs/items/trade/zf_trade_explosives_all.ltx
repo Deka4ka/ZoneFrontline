@@ -1,0 +1,16 @@
+#include "presets\trade_discounts.ltx"
+#include "presets\trade_presets.ltx"
+#include "zf_stock_explosives.ltx"
+[zf_discount_exotic]
+buy = 0.3
+sell = 1.8
+[trader]
+buy_condition = zf_buy_explosives
+sell_condition = zf_sell_explosives
+buy_supplies = {=zf_trader_tier(3)} zf_stock_explosives_3, {=zf_trader_tier(2)} zf_stock_explosives_2, zf_stock_explosives_1
+buy_item_condition_factor = 0.6
+buy_item_exponent = 2.0
+sell_item_exponent = 0.8
+discounts = discount_supplier
+zf_type = explosives
+zf_scope = all

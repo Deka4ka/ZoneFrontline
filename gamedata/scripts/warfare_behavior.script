@@ -1,0 +1,244 @@
+-- kind names the MCM control (flag -> check, choice -> list, scale -> track); modxml_warfare checks every trait row against this schema at load.
+TRAITS = {
+    -- loner and ecolog rows of smart_terrain_warfare.DISPATCH_MODELS; unified is process_base_squads.
+    dispatch_model                  = { kind = "choice", neutral = "unified", values = { "unified", "loner", "ecolog" } },
+
+    holdings_are_open               = { kind = "flag",   neutral = false },
+    displaceable_at_peace           = { kind = "flag",   neutral = false },
+    holds_ground                    = { kind = "flag",   neutral = true },
+    no_central_command              = { kind = "flag",   neutral = false },
+    no_intel_exchange               = { kind = "flag",   neutral = false },
+    peacetime_appetite              = { kind = "choice", neutral = "reluctant", values = { "never", "reluctant", "willing", "indifferent" } },
+
+    scorcher_travel                 = { kind = "choice", neutral = "zone_and_divide", values = { "zone_and_divide", "divide_open", "exempt" } },
+    ignores_miracle_machine         = { kind = "flag",   neutral = false },
+
+    lab_entrance_appeal             = { kind = "scale",  neutral = 1, min = 1, max = 20 },
+    patrol_scope                    = { kind = "choice", neutral = "any", values = { "any", "lairs_only" } },
+}
+
+TRAIT_ORDER = {
+    "dispatch_model",
+    "holdings_are_open",
+    "displaceable_at_peace",
+    "holds_ground",
+    "no_central_command",
+    "no_intel_exchange",
+    "peacetime_appetite",
+    "scorcher_travel",
+    "ignores_miracle_machine",
+    "lab_entrance_appeal",
+    "patrol_scope",
+}
+
+-- What each peacetime_appetite token multiplies a target's score by. Stored settings hold the
+-- token, so these numbers can be retuned without invalidating anyone's config.
+APPETITE = {
+    never       = 0,
+    reluctant   = 0.1,
+    willing     = 0.5,
+    indifferent = 1,
+}
+
+-- Sparse: only values that differ from the neutral one. A faction absent here is fully neutral.
+LORE = {
+    stalker = {
+        dispatch_model        = "loner",
+        holdings_are_open     = true,
+        displaceable_at_peace = true,
+        holds_ground          = false,
+        no_central_command    = true,
+        no_intel_exchange     = true,
+    },
+    ecolog = {
+        dispatch_model        = "ecolog",
+        holdings_are_open     = true,
+        displaceable_at_peace = true,
+        holds_ground          = false,
+        peacetime_appetite    = "never",
+    },
+    bandit = {
+        peacetime_appetite = "indifferent",
+        no_central_command = true,
+        no_intel_exchange  = true,
+    },
+    renegade = {
+        peacetime_appetite = "indifferent",
+        no_central_command = true,
+        no_intel_exchange  = true,
+    },
+    army = {
+        peacetime_appetite = "indifferent",
+        no_central_command = true,
+    },
+    monolith = {
+        scorcher_travel         = "exempt",
+        ignores_miracle_machine = true,
+    },
+    killer = {
+        scorcher_travel         = "divide_open",
+        ignores_miracle_machine = true,
+        peacetime_appetite      = "willing",
+        no_intel_exchange       = true,
+    },
+    greh = {
+        scorcher_travel         = "exempt",
+        ignores_miracle_machine = true,
+    },
+    isg = {
+        lab_entrance_appeal = 10,
+    },
+    dolg = {
+        patrol_scope = "lairs_only",
+    },
+}
+
+local NEUTRAL = {}
+for name, spec in pairs(TRAITS) do
+    NEUTRAL[name] = spec.neutral
+end
+
+local cache = {}
+
+-- neutral <- lore <- stored. The stored layer is nil until W3 fills options.factions[f].behavior.
+local function resolve(faction)
+    local t = {}
+    for name, value in pairs(NEUTRAL) do
+        t[name] = value
+    end
+
+    local lore = LORE[faction]
+    if lore then
+        for name, value in pairs(lore) do
+            t[name] = value
+        end
+    end
+
+    local factions = warfare_options.options and warfare_options.options.factions
+    local ff = factions and factions[faction]
+    local stored = ff and ff.behavior
+    if stored then
+        for name, value in pairs(stored) do
+            if TRAITS[name] then
+                t[name] = value
+            end
+        end
+    end
+
+    return t
+end
+
+--- Resolved traits for a faction. Never nil: an unknown faction, "none", monster and zombied all
+--- resolve to neutral. The returned table is shared and must be treated as read-only.
+function get(faction)
+    if faction == nil then
+        return NEUTRAL
+    end
+
+    local t = cache[faction]
+    if t == nil then
+        t = resolve(faction)
+        cache[faction] = t
+        warfare_log.debug("warfare_behavior.get: resolved faction=%s", tostring(faction))
+    end
+    return t
+end
+
+--- Which dispatcher moves this faction's squads: "unified" (process_base_squads), "loner" or "ecolog".
+function dispatch_model(faction)
+    return get(faction).dispatch_model
+end
+
+--- True when the faction runs its own dispatcher instead of process_base_squads.
+function is_independent(faction)
+    return get(faction).dispatch_model ~= "unified"
+end
+
+-- One accessor per trait, so the trait names exist as identifiers the tooling can find.
+
+--- Non-enemies may walk into and take this faction's non-base holdings.
+function holdings_are_open(faction)
+    return get(faction).holdings_are_open
+end
+
+--- Factions at peace with this one may still take its bases, by parking more squads on them than
+--- the garrison holds. No fighting is involved: sim_offline_combat only ever simulates enemies, and
+--- create_invasion_plan sizes a non-enemy force to outnumber rather than to win.
+function displaceable_at_peace(faction)
+    return get(faction).displaceable_at_peace
+end
+
+--- Defends what it occupies, and taking it costs relations and counts as conquest.
+function holds_ground(faction)
+    return get(faction).holds_ground
+end
+
+--- No leadership: a player of this faction gets no bounty for kills and only half the goodwill.
+function no_central_command(faction)
+    return get(faction).no_central_command
+end
+
+--- No inter-faction intel exchange: this faction neither receives what allied squads and outposts
+--- see nor shares its own. Intel inside the faction still flows. Only meaningful with fog of war on.
+function no_intel_exchange(faction)
+    return get(faction).no_intel_exchange
+end
+
+--- True when what faction b's squads and outposts see reaches a player of faction a: same faction,
+--- or friends with neither side opting out of the exchange.
+function shares_intel(a, b)
+    if a == b then
+        return true
+    end
+    return game_relations.is_factions_friends(a, b) and not no_intel_exchange(a) and not no_intel_exchange(b)
+end
+
+--- How readily this faction goes after the holdings of someone it is not at war with, resolved
+--- through APPETITE to the multiplier find_targets applies. Zero drops those candidates outright.
+--- Falls back to the neutral rather than to zero, so an unrecognised stored token cannot silently
+--- switch a faction off.
+function peacetime_appetite(faction)
+    local token = get(faction).peacetime_appetite
+    return APPETITE[token] or APPETITE[NEUTRAL.peacetime_appetite]
+end
+
+--- Brain Scorcher exposure: "zone_and_divide", "divide_open" or "exempt".
+function scorcher_travel(faction)
+    return get(faction).scorcher_travel
+end
+
+function ignores_miracle_machine(faction)
+    return get(faction).ignores_miracle_machine
+end
+
+--- Multiplier applied to lab-entrance smarts when this faction scores targets.
+function lab_entrance_appeal(faction)
+    return get(faction).lab_entrance_appeal
+end
+
+--- What this faction's random patrols will score: "any" or "lairs_only".
+function patrol_scope(faction)
+    return get(faction).patrol_scope
+end
+
+--- The lore value, ignoring anything stored. W3 uses this as the per-faction MCM default.
+function default(faction, name)
+    local lore = faction and LORE[faction]
+    local value = lore and lore[name]
+    if value ~= nil then
+        return value
+    end
+
+    local spec = TRAITS[name]
+    return spec and spec.neutral
+end
+
+--- Called by warfare_options.update_settings after the per-faction behavior block is rebuilt.
+function invalidate(faction)
+    warfare_log.debug("warfare_behavior.invalidate: faction=%s", tostring(faction))
+    if faction then
+        cache[faction] = nil
+    else
+        cache = {}
+    end
+end

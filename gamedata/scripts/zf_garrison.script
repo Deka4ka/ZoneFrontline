@@ -1,0 +1,703 @@
+local C = zf_core
+local KIND_ORDER = { "base", "resource", "territory" }
+local function on()
+    return C.cfg("garrison_enabled", true)
+end
+local function posts()
+    return C.store("garrison")
+end
+local function posted()
+    return C.store("posted")
+end
+local function kind_of(sm)
+    local p = sm.props
+    if not p then return end
+    if (p.base or 0) > 0 then return "base" end
+    if (p.lair or 0) > 0 then return end
+    if (p.resource or 0) > 0 then return "resource" end
+    if (p.territory or 0) > 0 then return "territory" end
+end
+local function storm()
+    local ok, s = pcall(function()
+        return surge_manager.get_surge_manager().started or psi_storm_manager.get_psi_storm_manager().started
+    end)
+    return ok and s == true
+end
+local function postable(sq, f, winner)
+    if not sq or sq:get_squad_community() ~= f or sq:npc_count() < 1 then return false end
+    if axr_companions.companion_squads[sq.id] or posted()[sq.id] or sq.stay_time then return false end
+    if warfare_squad_command and warfare_squad_command.is_controlled(sq.id) then return false end
+    if not winner and (C.store("busy")[sq.id] or 0) > C.now() then return false end
+    return not (C.store("errands")[sq.id] or C.store("traders")[sq.id])
+end
+local function arrived(sq, sm)
+    if sq.current_target_id ~= sm.id then return false end
+    if sq.current_action == 1 then return true end
+    local p, q = C.gpos(sq), C.smart_gpos(sm)
+    return p ~= nil and q ~= nil and C.d2(p, q) <= 60 * 60
+end
+local function live(id, sec)
+    local sq = C.live_squad(id)
+    return sq and sq:section_name() == sec and sq or nil
+end
+local function unpost(id)
+    local rec = posts()[id]
+    if rec then
+        posted()[rec.sq] = nil
+        for _, x in ipairs(rec.extra or {}) do posted()[x.id] = nil end
+    end
+    posts()[id] = nil
+end
+local function extras(rec)
+    local out = {}
+    for _, x in ipairs(rec.extra or {}) do
+        if live(x.id, x.sec) then out[#out + 1] = x else posted()[x.id] = nil end
+    end
+    rec.extra = out
+    return out
+end
+local function promote(id, rec)
+    local x = table.remove(extras(rec), 1)
+    if not x then return false end
+    rec.sq, rec.sec = x.id, x.sec
+    return true
+end
+function release(sq_id)
+    local id = posted()[sq_id]
+    local rec = id and posts()[id]
+    if not rec then return end
+    posted()[sq_id] = nil
+    if rec.sq == sq_id then
+        if not promote(id, rec) then unpost(id) end
+    else
+        for i, x in ipairs(rec.extra or {}) do
+            if x.id == sq_id then table.remove(rec.extra, i) break end
+        end
+    end
+end
+local function post(sm, sq, pending)
+    local t = C.now()
+    local rec = posts()[sm.id]
+    if rec then posted()[rec.sq] = nil end
+    rec = rec or { fort = 0, supply = 1 }
+    rec.f, rec.sq, rec.sec, rec.since, rec.pending = sm.owning_faction, sq.id, sq:section_name(), t, pending or nil
+    rec.fort_t, rec.sup_t, rec.lvl = rec.fort_t or t, rec.sup_t or t, rec.lvl or 1
+    rec.dl = pending and t + 12 * C.HOUR or nil
+    posts()[sm.id] = rec
+    posted()[sq.id] = sm.id
+    C.store("busy")[sq.id] = nil
+    C.unshield(sq.id)
+    return rec
+end
+local function holding(sq)
+    local id = sq and posted()[sq.id]
+    local rec = id and posts()[id]
+    if not (rec and not rec.pending and sq.current_target_id == id) then return end
+    if rec.sq == sq.id then return rec, id end
+    for _, x in ipairs(rec.extra or {}) do
+        if x.id == sq.id then return rec, id end
+    end
+end
+function fort_of(sq_id)
+    local rec = holding(alife_object(sq_id))
+    return rec and rec.fort or 0
+end
+function hold_factor(sq)
+    if not on() then return 1 end
+    local rec = holding(sq)
+    if not rec then return 1 end
+    return C.cfg("garrison_morale", 0.6) * (1 - 0.1 * rec.fort)
+end
+local function power_mult(sq)
+    local rec = on() and holding(sq)
+    if not rec then return 1 end
+    local m = 1 + rec.fort * C.cfg("garrison_fort_power", 0.15)
+    if (rec.supply or 1) <= 0 then m = m * 0.85 end
+    return m
+end
+local function hook_power()
+    local soc = sim_offline_combat
+    if not (soc and soc.calculate_squad_power) or soc.__zf_garrison then return end
+    soc.__zf_garrison = true
+    local orig = soc.calculate_squad_power
+    soc.calculate_squad_power = function(squad, community, raw, ...)
+        local running = not raw and squad and soc.ocs_power and soc.ocs_power[squad.id]
+        local p = orig(squad, community, raw, ...)
+        if running or type(p) ~= "number" then return p end
+        local ok, m = pcall(power_mult, squad)
+        return (ok and m ~= 1) and p * m or p
+    end
+end
+local function on_before_hit(npc, shit)
+    if not (on() and C.active() and shit and shit.power) then return end
+    local sq = C.squad_of(npc:id())
+    local rec, id = holding(sq)
+    if not (rec and rec.fort > 0) then return end
+    local sm = alife_object(id)
+    if sm and sm.position:distance_to(npc:position()) <= C.cfg("garrison_cover_radius", 60) then
+        shit.power = shit.power * (1 - rec.fort * C.cfg("garrison_cover", 0.08))
+    end
+end
+local picture, picture_t = {}, -1
+local function view(f)
+    local t = time_global()
+    if t - picture_t > 1000 then picture, picture_t = {}, t end
+    local v = picture[f]
+    if v then return v end
+    v = { own = {}, holes = {}, used = 0 }
+    for _, sm in ipairs(C.smarts()) do
+        if sm.owning_faction == f then
+            v.own[#v.own + 1] = sm
+            if kind_of(sm) and not posts()[sm.id] and C.squads_at(f, sm.id) == 0 then v.holes[#v.holes + 1] = sm end
+        end
+    end
+    for _, rec in pairs(posts()) do
+        if rec.f == f then v.used = v.used + 1 + #(rec.extra or {}) end
+    end
+    v.cap = math.floor(#C.squads_of(f) * C.cfg("garrison_share", 0.7))
+    picture[f] = v
+    return v
+end
+local function nearest(list, gp, r)
+    local best, bd = nil, r * r
+    for _, sm in ipairs(list) do
+        local p = C.smart_gpos(sm)
+        local d = p and C.d2(p, gp)
+        if d and d <= bd then best, bd = sm, d end
+    end
+    return best
+end
+local function at_edge(v, sm, step)
+    local p = C.smart_gpos(sm)
+    if not p then return true end
+    for _, o in ipairs(v.own) do
+        local q = o.id ~= sm.id and C.smart_gpos(o)
+        if q and C.d2(p, q) <= step * step then return true end
+    end
+    return false
+end
+local function front_point(v, f, gp, goal, step)
+    if not v.edge then
+        v.edge = {}
+        for _, sm in ipairs(C.smarts()) do
+            if kind_of(sm) and not C.is_base(sm) and (sm.owning_faction or "none") == "none" and at_edge(v, sm, step) then
+                v.edge[#v.edge + 1] = sm
+            end
+        end
+    end
+    local lid, gq = C.smart_level(goal), C.smart_gpos(goal)
+    local best, score
+    for _, sm in ipairs(v.edge) do
+        local p = C.smart_level(sm) == lid and C.squads_at(f, sm.id) == 0 and C.smart_gpos(sm)
+        local s = p and gq and math.sqrt(C.d2(p, gp)) + 0.5 * math.sqrt(C.d2(p, gq))
+        if s and (not score or s < score) then best, score = sm, s end
+    end
+    return best
+end
+local function steer(squad, target_id)
+    if not (C.cfg("garrison_steady", true) and C.calm()) then return end
+    local sm = alife_object(target_id)
+    if not (sm and sm:clsid() == clsid.smart_terrain and kind_of(sm)) or C.is_base(sm) then return end
+    local ok, f = pcall(squad.get_squad_community, squad)
+    if not (ok and C.human(f)) or sm.owning_faction == f or C.human(sm.owning_faction) then return end
+    if squad.patrol_table or axr_companions.companion_squads[squad.id] then return end
+    local gp = C.gpos(squad)
+    if not gp then return end
+    local v = view(f)
+    if #v.holes > 0 and v.used < v.cap then
+        local hole = nearest(v.holes, gp, C.cfg("garrison_radius", 1200))
+        if hole then
+            for i, h in ipairs(v.holes) do
+                if h.id == hole.id then table.remove(v.holes, i) break end
+            end
+            v.used = v.used + 1
+            return hole, true
+        end
+    end
+    local step = C.cfg("front_step", 700)
+    if #v.own > 0 and not at_edge(v, sm, step) then
+        local fr = front_point(v, f, gp, sm, step)
+        if fr and fr.id ~= sm.id then return fr end
+    end
+end
+function on_captured(sm, owner)
+    if not (on() and kind_of(sm) and C.human(owner)) or posts()[sm.id] then return end
+    local v = view(owner)
+    if v.used >= v.cap then return end
+    local here = SIMBOARD.smarts[sm.id]
+    local best
+    for sid in pairs(here and here.squads or {}) do
+        local sq = C.live_squad(sid)
+        if postable(sq, owner, true) and sq.current_target_id == sm.id and (not best or sq:npc_count() < best:npc_count()) then
+            best = sq
+        end
+    end
+    if best then
+        post(sm, best, not arrived(best, sm))
+        v.used = v.used + 1
+        C.log("garrison: %s squad %s that took %s holds it", owner, best.id, sm:name())
+    end
+end
+local function stand_in(squad, target)
+    local here = SIMBOARD.smarts[squad.current_target_id or -1]
+    local ok, f = pcall(squad.get_squad_community, squad)
+    if not (ok and here) then return end
+    for sid in pairs(here.squads or {}) do
+        local sq = sid ~= squad.id and C.live_squad(sid)
+        if sq and sq.current_action == 1 and not sq.patrol_table and sq.current_target_id ~= target
+            and postable(sq, f) then
+            return sq
+        end
+    end
+end
+local function hook_set_target()
+    local ssw = sim_squad_warfare
+    if not (ssw and ssw.set_target) or ssw.__zf_garrison then return end
+    ssw.__zf_garrison = true
+    local orig = ssw.set_target
+    ssw.set_target = function(squad, target, force, ...)
+        if squad and target and not force and on() and C.active() then
+            local hold = posted()[squad.id]
+            if hold and hold ~= target and not C.own_order() and not storm() then
+                local ok, sq = pcall(stand_in, squad, target)
+                if ok and sq then return ssw.set_target(sq, target, force, ...) end
+                return
+            end
+            if not hold and not C.own_order() and not storm() then
+                local ok, to, hole = pcall(steer, squad, target)
+                if not ok then
+                    C.warn("garrison steer: %s", to)
+                elseif to then
+                    local r = orig(squad, to.id, force, ...)
+                    if hole and squad.assigned_target_id == to.id then post(to, squad, true) end
+                    return r
+                end
+            end
+            local rec = posts()[target]
+            if rec and not rec.pending and not rec.alarm then
+                local ok, f = pcall(squad.get_squad_community, squad)
+                if ok and f and C.enemies(f, rec.f) then rec.alarm = f end
+            end
+        end
+        return orig(squad, target, force, ...)
+    end
+end
+local function watched(sm)
+    local lid = C.smart_level(sm)
+    for _, p in ipairs(C.players()) do
+        if C.player_level(p) == lid then return true end
+    end
+    return false
+end
+local function relevant(sm, f)
+    return f == warfare.actor_faction or watched(sm)
+end
+local function tell(sm, f)
+    return f == warfare.actor_faction and (watched(sm) or kind_of(sm) == "base")
+end
+local function supply_run(sm, rec)
+    if rec.run or kind_of(sm) == "base" or not C.ready("supply_" .. sm.id) then return end
+    C.cooldown("supply_" .. sm.id, C.cfg("garrison_supply_retry_h", 6))
+    local gp = C.smart_gpos(sm)
+    local base = gp and C.nearest_own_base(rec.f, gp)
+    local bp = base and C.smart_gpos(base)
+    local runner = bp and C.nearest_free(rec.f, bp, 900, 1)[1]
+    if not (runner and runner.id ~= rec.sq and C.send(runner, sm.id, 12)) then return end
+    rec.run = { id = runner.id, sec = runner:section_name(), t = C.now() }
+    C.log("garrison %s: supply run from %s", sm:name(), base:name())
+    if math.random() < C.cfg("garrison_intercept_chance", 0.25) then
+        local best, bd, bf
+        for _, ef in ipairs(C.war_factions()) do
+            if C.enemies(ef, rec.f) then
+                local h = C.nearest_free(ef, gp, 900, 1)[1]
+                local d = h and C.d2(C.gpos(h) or gp, gp)
+                if d and (not bd or d < bd) then best, bd, bf = h, d, ef end
+            end
+        end
+        if best and zf_life.chase(best, runner, 3) then
+            rec.run.hunted = bf
+            C.log("garrison %s: %s go after the supply run", sm:name(), bf)
+            if relevant(sm, rec.f) then
+                C.note("war", { bf, rec.f }, C.text("zf_j_intercept", bf, C.faction_name(bf), C.smart_name(sm)))
+            end
+        end
+    end
+    if relevant(sm, rec.f) then
+        C.note("war", rec.f, C.text("zf_j_supply_sent", rec.f, C.faction_name(rec.f), C.smart_name(sm)))
+    end
+end
+local function check_run(sm, rec)
+    local r = rec.run
+    if not r then return end
+    local sq = live(r.id, r.sec)
+    if not sq then
+        rec.run = nil
+        rec.fort = math.max(0, rec.fort - 1)
+        C.log("garrison %s: supply run lost", sm:name())
+        C.report("war", rec.f, tell(sm, rec.f), "zf_garrison_supply_lost", rec.f, "danger", C.smart_name(sm))
+    elseif arrived(sq, sm) then
+        rec.run, rec.supply, rec.sup_t = nil, 1, C.now()
+        C.send_home(sq, 2)
+        C.log("garrison %s: resupplied", sm:name())
+        if relevant(sm, rec.f) then
+            C.note("war", rec.f, C.text("zf_j_supply_in", rec.f, C.faction_name(rec.f), C.smart_name(sm)))
+        end
+    elseif C.now() - r.t > 18 * C.HOUR then
+        rec.run = nil
+    elseif sq.assigned_target_id ~= sm.id then
+        C.send(sq, sm.id, 12)
+    end
+end
+local function relieve(sm, rec)
+    local r = rec.relief
+    if r then
+        local sq = live(r.id, r.sec)
+        if not sq then
+            rec.relief, rec.since = nil, C.now() - (C.cfg("garrison_rotate_h", 36) - 6) * C.HOUR
+        elseif arrived(sq, sm) then
+            local old = C.live_squad(rec.sq)
+            post(sm, sq)
+            rec.relief = nil
+            if old then C.send_home(old, 6) end
+            C.log("garrison %s: relieved", sm:name())
+            if relevant(sm, rec.f) then
+                C.note("war", rec.f, C.text("zf_j_relief", rec.f, C.faction_name(rec.f), C.smart_name(sm)))
+            end
+        elseif sq.assigned_target_id ~= sm.id then
+            C.send(sq, sm.id, 12)
+        end
+        return
+    end
+    if C.now() - rec.since < C.cfg("garrison_rotate_h", 36) * C.HOUR then return end
+    local gp = C.smart_gpos(sm)
+    for _, sq in ipairs(gp and C.nearest_free(rec.f, gp, C.cfg("garrison_radius", 1200), 2) or {}) do
+        if sq.id ~= rec.sq and C.send(sq, sm.id, 12) then
+            rec.relief = { id = sq.id, sec = sq:section_name() }
+            return
+        end
+    end
+    rec.since = rec.since + 6 * C.HOUR
+end
+local function raise_alarm(sm, rec)
+    local f = rec.alarm
+    rec.alarm = nil
+    if (rec.alarm_t or 0) > C.now() then return end
+    rec.alarm_t = C.now() + C.cfg("garrison_alarm_cd_h", 6) * C.HOUR
+    local gp = C.smart_gpos(sm)
+    local sent = 0
+    for _, h in ipairs(gp and C.nearest_free(rec.f, gp, C.cfg("garrison_alarm_radius", 800), 1) or {}) do
+        if C.send(h, sm.id, 4) then sent = sent + 1 end
+    end
+    C.log("garrison %s (%s): alarm against %s, %d squads come", sm:name(), rec.f, f, sent)
+    C.report("war", { rec.f, f }, tell(sm, rec.f), "zf_garrison_alarm", rec.f, "danger", C.smart_name(sm), C.faction_name(f))
+end
+local LEVEL_KEY = { "zf_post_lvl_1", "zf_post_lvl_2", "zf_post_lvl_3" }
+local function buildings(sm)
+    return (sm.props.surge or 0) > 0 or kind_of(sm) == "base"
+end
+local function at_front(sm, f)
+    local p = C.smart_gpos(sm)
+    if not p then return false end
+    local r2 = (C.cfg("front_step", 700) * 1.2) ^ 2
+    for _, o in ipairs(C.smarts_on_level(C.smart_level(sm))) do
+        local of = o.owning_faction
+        if o.id ~= sm.id and C.human(of) and C.enemies(f, of) then
+            local q = C.smart_gpos(o)
+            if q and C.d2(p, q) <= r2 then return true end
+        end
+    end
+    return false
+end
+local function level_of(sm, rec)
+    local fed = (rec.supply or 1) >= 0.3
+    if rec.fort >= 3 and fed and buildings(sm) then return 3 end
+    if rec.fort >= 2 and fed then return 2 end
+    return 1
+end
+function developed(smart_id, f)
+    local rec = posts()[smart_id]
+    return rec ~= nil and rec.f == f and (rec.lvl or 1) >= 2
+end
+local function reinforce(sm, rec, room)
+    local want = math.min(C.cfg("garrison_extra_max", 2), (rec.lvl - 1) + (rec.front and 1 or 0))
+    local ex = extras(rec)
+    while #ex > want do
+        local x = table.remove(ex)
+        posted()[x.id] = nil
+        room.used = room.used - 1
+        local s = C.live_squad(x.id)
+        if s then C.send_home(s, 4) end
+    end
+    if #ex >= want or room.used >= room.cap or (room.sends or 1) <= 0 or not C.ready("post_reinf_" .. sm.id) then return end
+    C.cooldown("post_reinf_" .. sm.id, 1)
+    room.sends = (room.sends or 1) - 1
+    local gp = C.smart_gpos(sm)
+    for _, sq in ipairs(gp and C.nearest_free(rec.f, gp, C.cfg("garrison_radius", 1200), 3) or {}) do
+        if sq.id ~= rec.sq and postable(sq, rec.f) and C.send(sq, sm.id, 12) then
+            ex[#ex + 1] = { id = sq.id, sec = sq:section_name() }
+            posted()[sq.id] = sm.id
+            C.store("busy")[sq.id] = nil
+            C.unshield(sq.id)
+            room.used = room.used + 1
+            C.log("garrison %s: one more %s squad (%d extra)", sm:name(), rec.f, #ex)
+            return
+        end
+    end
+end
+local function post_trader(sm, rec)
+    if not C.cfg("post_traders", true) or rec.lvl < 2 or not buildings(sm) or kind_of(sm) == "base" then return end
+    if rec.trader and zf_traders.at_post(rec.trader) then return end
+    rec.trader = nil
+    if not C.ready("post_trader_" .. sm.id) then return end
+    C.cooldown("post_trader_" .. sm.id, C.cfg("post_trader_cd_h", 8) * C.rand(0.7, 1.3))
+    if math.random() > C.cfg("post_trader_chance", 0.5) then return end
+    rec.trader = zf_traders.open_post(sm, rec.f, math.random() < C.cfg("post_free_chance", 0.3))
+    if rec.trader then C.log("garrison %s: a trader sets up at the post", sm:name()) end
+end
+function grow(sm, rec, room)
+    local t = C.now()
+    if (rec.front_t or 0) <= t then
+        rec.front, rec.front_t = at_front(sm, rec.f), t + 600
+    end
+    local lvl = level_of(sm, rec)
+    if lvl ~= (rec.lvl or 1) then
+        local up = lvl > (rec.lvl or 1)
+        rec.lvl = lvl
+        if relevant(sm, rec.f) then
+            C.note("war", rec.f, C.text(up and "zf_j_post_up" or "zf_j_post_down", rec.f, C.faction_name(rec.f),
+                C.smart_name(sm), game.translate_string(LEVEL_KEY[lvl])))
+        end
+        if up and lvl == 3 and tell(sm, rec.f) then
+            C.report("war", rec.f, true, "zf_post_fortified", rec.f, "news", C.smart_name(sm))
+        end
+    end
+    reinforce(sm, rec, room)
+    post_trader(sm, rec)
+end
+local function keep(sm, rec, t, room)
+    if sm.owning_faction ~= rec.f then return unpost(sm.id) end
+    local sq = live(rec.sq, rec.sec)
+    if not sq and promote(sm.id, rec) then sq = live(rec.sq, rec.sec) end
+    if not sq then
+        if not rec.pending and relevant(sm, rec.f) then
+            C.report("war", rec.f, tell(sm, rec.f), "zf_garrison_lost", rec.f, "danger", C.smart_name(sm))
+        end
+        return unpost(sm.id)
+    end
+    if rec.pending then
+        if arrived(sq, sm) then
+            rec.pending, rec.dl, rec.since = nil, nil, t
+            if tell(sm, rec.f) then
+                C.note("war", rec.f, C.text("zf_j_posted", rec.f, C.faction_name(rec.f), C.smart_name(sm)))
+            end
+        elseif t > rec.dl then
+            return unpost(sm.id)
+        elseif sq.assigned_target_id ~= sm.id then
+            C.send(sq, sm.id, 12)
+        end
+        return
+    end
+    if sq.assigned_target_id ~= sm.id and not storm() then C.send(sq, sm.id, 12) end
+    if kind_of(sm) ~= "base" then
+        rec.supply = math.max(0, (rec.supply or 1) - (t - (rec.sup_t or t)) / (C.cfg("garrison_supply_h", 30) * C.HOUR))
+    else
+        rec.supply = 1
+    end
+    rec.sup_t = t
+    local dig = C.cfg("garrison_dig_h", 10) * C.HOUR
+    if t - rec.fort_t >= dig then
+        rec.fort_t = t
+        if rec.supply <= 0 then
+            rec.fort = math.max(0, rec.fort - 1)
+        elseif rec.fort < 3 then
+            rec.fort = rec.fort + 1
+            if rec.fort == 3 and relevant(sm, rec.f) then
+                C.note("war", rec.f, C.text("zf_j_dug_in", rec.f, C.faction_name(rec.f), C.smart_name(sm)))
+            end
+        end
+    end
+    if C.cfg("garrison_supply", true) then
+        check_run(sm, rec)
+        if rec.supply < 0.5 then supply_run(sm, rec) end
+    end
+    relieve(sm, rec)
+    if rec.alarm then raise_alarm(sm, rec) end
+    grow(sm, rec, room or { used = 0, cap = math.huge })
+end
+local function staff(sm, f, budget)
+    local here = SIMBOARD.smarts[sm.id]
+    local best
+    for sid in pairs(here and here.squads or {}) do
+        local sq = C.live_squad(sid)
+        if postable(sq, f) and sq.current_target_id == sm.id and (not best or sq:npc_count() < best:npc_count()) then
+            best = sq
+        end
+    end
+    if best then
+        post(sm, best, not arrived(best, sm))
+        return budget
+    end
+    if budget <= 0 then return budget end
+    local gp = C.smart_gpos(sm)
+    for _, sq in ipairs(gp and C.nearest_free(f, gp, C.cfg("garrison_radius", 1200), 3) or {}) do
+        if postable(sq, f) and C.send(sq, sm.id, 12) then
+            post(sm, sq, true)
+            C.log("garrison: %s squad %s sent to hold %s", f, sq.id, sm:name())
+            return budget - 1
+        end
+    end
+    return budget - 1
+end
+local cursor = 0
+function round(all)
+    if not on() then return end
+    local t = C.now()
+    local held, squads, used = {}, {}, {}
+    for _, sm in ipairs(C.smarts()) do
+        local f, k = sm.owning_faction, kind_of(sm)
+        if k and C.human(f) then
+            held[f] = held[f] or { base = {}, resource = {}, territory = {} }
+            table.insert(held[f][k], sm)
+        end
+    end
+    for id, rec in pairs(posts()) do
+        local sm = alife_object(id)
+        if not (sm and sm.owning_faction == rec.f and kind_of(sm)) then unpost(id) end
+    end
+    for id, smid in pairs(posted()) do
+        local rec = posts()[smid]
+        local mine = rec and rec.sq == id
+        for _, x in ipairs(rec and rec.extra or {}) do
+            if x.id == id then mine = true end
+        end
+        if not mine then posted()[id] = nil end
+    end
+    for _, rec in pairs(posts()) do used[rec.f] = (used[rec.f] or 0) + 1 + #(rec.extra or {}) end
+    local fs = {}
+    for f in pairs(held) do fs[#fs + 1] = f end
+    if #fs == 0 then return end
+    table.sort(fs)
+    if not all then
+        cursor = cursor % #fs + 1
+        fs = { fs[cursor] }
+    end
+    local budget = C.cfg("garrison_sends", 2)
+    for _, f in ipairs(fs) do
+        local by = held[f]
+        squads[f] = #C.squads_of(f)
+        local cap = math.floor(squads[f] * C.cfg("garrison_share", 0.7))
+        local room = { used = used[f] or 0, cap = cap, sends = C.cfg("garrison_sends", 2) }
+        for _, k in ipairs(KIND_ORDER) do
+            for _, sm in ipairs(by[k]) do
+                local rec = posts()[sm.id]
+                if rec then
+                    local ok, err = pcall(keep, sm, rec, t, room)
+                    used[f] = room.used
+                    if not ok then C.warn("garrison %s: %s", sm:name(), err) end
+                elseif (used[f] or 0) < cap then
+                    budget = staff(sm, f, budget)
+                    if posts()[sm.id] then used[f] = (used[f] or 0) + 1 end
+                end
+            end
+        end
+    end
+end
+function stats()
+    local out = {}
+    for _, sm in ipairs(C.smarts()) do
+        local f = sm.owning_faction
+        if kind_of(sm) and C.human(f) then
+            local s = out[f] or { held = 0, points = 0, dug = 0, low = 0, lvl2 = 0, lvl3 = 0 }
+            out[f] = s
+            s.points = s.points + 1
+            local rec = posts()[sm.id]
+            if rec and rec.f == f and not rec.pending then
+                s.held = s.held + 1
+                if rec.fort >= 2 then s.dug = s.dug + 1 end
+                if (rec.supply or 1) < 0.25 then s.low = s.low + 1 end
+                if (rec.lvl or 1) == 2 then s.lvl2 = s.lvl2 + 1 elseif (rec.lvl or 1) == 3 then s.lvl3 = s.lvl3 + 1 end
+            end
+        end
+    end
+    return out
+end
+function list()
+    local out = {}
+    for id, rec in pairs(posts()) do
+        local sm = alife_object(id)
+        if sm and not rec.pending then
+            out[#out + 1] = { f = rec.f, s = C.smart_name(sm), lvl = rec.lvl or 1, n = 1 + #(rec.extra or {}),
+                fort = rec.fort or 0, sup = math.floor((rec.supply or 1) * 100 + 0.5),
+                tr = rec.trader and zf_traders.at_post(rec.trader) and zf_traders.trade_of(rec.trader) or "",
+                fr = rec.front and 1 or 0 }
+        end
+    end
+    table.sort(out, function(a, b)
+        if a.lvl ~= b.lvl then return a.lvl > b.lvl end
+        return a.s < b.s
+    end)
+    return out
+end
+local homes, homes_n
+function home_bases()
+    local all = C.smarts()
+    if homes and homes_n == #all then return homes end
+    homes, homes_n = {}, #all
+    local by = {}
+    for _, sm in ipairs(all) do by[sm:name()] = sm end
+    local ini = ini_file("misc\\simulation.ltx")
+    if not (ini and ini.section_for_each) then return homes end
+    ini:section_for_each(function(section)
+        local sm = by[section]
+        if not (sm and C.is_base(sm)) then return end
+        local n, best, bn = {}, nil, nil
+        for i = 0, ini:line_count(section) - 1 do
+            local _, sec, cnt = ini:r_line(section, i, "", "")
+            local f = sec and ini_sys:r_string_ex(sec, "faction")
+            if f and C.human(f) then n[f] = (n[f] or 0) + (tonumber(cnt) or 1) end
+        end
+        for f, c in pairs(n) do
+            if not bn or c > bn then best, bn = f, c end
+        end
+        if best then homes[sm.id] = best end
+    end)
+    return homes
+end
+local function homecoming()
+    if not (on() and C.cfg("home_return", true) and C.calm()) then return end
+    local done = {}
+    for id, f in pairs(home_bases()) do
+        local sm = alife_object(id)
+        local owner = sm and sm.owning_faction
+        if sm and owner ~= f and C.human(f) and (done[f] or 0) < 2 and C.ready("home_" .. id) and C.squads_at(f, id) == 0 then
+            local taken = C.human(owner)
+            if taken and not C.enemies(owner, f) then
+                C.cooldown("home_" .. id, 6)
+            else
+                local gp, sent = C.smart_gpos(sm), 0
+                for _, sq in ipairs(gp and C.nearest_free(f, gp, C.cfg("home_radius", 3000), taken and 2 or 1) or {}) do
+                    if C.send(sq, id, 12) then sent = sent + 1 end
+                end
+                local _, d = C.nearest_player(sm.position, C.smart_level(sm))
+                if sent == 0 and not taken and not C.at_cap(f) and not (d and d < 200) then
+                    local ok, sq = pcall(warfare.spawn_squad, zf_encounters.squad_section(f, "advanced"), sm)
+                    if ok and sq and C.send(sq, id, 12) then sent = 1 end
+                end
+                C.cooldown("home_" .. id, sent > 0 and (taken and 6 or 3) or 1)
+                if sent > 0 then
+                    done[f] = (done[f] or 0) + 1
+                    C.log("home: %s sends %d squads back to %s (%s)", f, sent, sm:name(), tostring(owner))
+                    C.note("war", f, C.text(taken and "zf_j_home_retake" or "zf_j_home_back", nil, C.faction_name(f),
+                        C.smart_name(sm)))
+                end
+            end
+        end
+    end
+end
+function on_game_start()
+    C.every("zf_home", 300, homecoming)
+    hook_set_target()
+    hook_power()
+    RegisterScriptCallback("npc_on_before_hit", on_before_hit)
+    C.every("zf_garrison", 5, round)
+end
